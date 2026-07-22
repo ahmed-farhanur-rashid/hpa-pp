@@ -1,0 +1,105 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════
+# HPA++ Docker Compose — Development & Demo
+# ═══════════════════════════════════════════════════════════════
+# Each microservice is independently buildable and deployable.
+# All share a Docker network and a mounted volume for the shared
+# schema package and data.
+#
+# Deployment target: Render (each service as a separate Web Service)
+# ═══════════════════════════════════════════════════════════════
+
+x-shared-config: &shared-config
+  env_file:
+    - .env
+  volumes:
+    - ./shared:/app/shared:ro
+    - hpap_data:/data
+  restart: unless-stopped
+  networks:
+    - hpap_net
+
+services:
+  # ─── Simulation Service ──────────────────────────────────────
+  # Port: 8001
+  # Generates realistic Kubernetes cluster metrics from traffic profiles.
+  simulation:
+    build:
+      context: ./services/simulation
+      dockerfile: Dockerfile
+    container_name: hpap-simulation
+    ports:
+      - "8001:8000"
+    <<: *shared-config
+
+  # ─── Forecasting Service ─────────────────────────────────────
+  # Port: 8002
+  # Prophet-based time-series forecasting with confidence intervals.
+  forecasting:
+    build:
+      context: ./services/forecasting
+      dockerfile: Dockerfile
+    container_name: hpap-forecasting
+    ports:
+      - "8002:8000"
+    <<: *shared-config
+    depends_on:
+      simulation:
+        condition: service_started
+
+  # ─── Controller Service ──────────────────────────────────────
+  # Port: 8003
+  # Risk-aware predictive scaling + GPU scheduling.
+  controller:
+    build:
+      context: ./services/controller
+      dockerfile: Dockerfile
+    container_name: hpap-controller
+    ports:
+      - "8003:8000"
+    <<: *shared-config
+    depends_on:
+      forecasting:
+        condition: service_started
+
+  # ─── Dashboard Service ───────────────────────────────────────
+  # Port: 8501
+  # Real-time monitoring dashboard (Streamlit).
+  dashboard:
+    build:
+      context: ./services/dashboard
+      dockerfile: Dockerfile
+    container_name: hpap-dashboard
+    ports:
+      - "8501:8501"
+    <<: *shared-config
+    depends_on:
+      - simulation
+      - forecasting
+      - controller
+
+  # ─── Integration / Demo Service ──────────────────────────────
+  # No exposed port — runs contract tests, E2E tests, and demo bootstrap.
+  integration:
+    build:
+      context: ./services/integration
+      dockerfile: Dockerfile
+    container_name: hpap-integration
+    profiles:
+      - demo
+      - test
+    <<: *shared-config
+    depends_on:
+      - simulation
+      - forecasting
+      - controller
+      - dashboard
+
+volumes:
+  hpap_data:
+    driver: local
+
+networks:
+  hpap_net:
+    driver: bridge
