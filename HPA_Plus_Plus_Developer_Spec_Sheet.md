@@ -2,13 +2,13 @@
 
 ## AI-Powered Predictive Auto Scaling & GPU Scheduling for Kubernetes
 
-| Field | Details |
-| :--- | :--- |
-| **Project** | HPA++ — AI-Powered Predictive Auto Scaling & GPU Scheduling |
-| **Hackathon** | AI Innovation Hackathon 2026 — Phase 1 |
-| **Track** | AI for Cluster Intelligence |
-| **Team** | Team Falah |
-| **Document Version** | 1.0 |
+| Field                | Details                                                     |
+| :------------------- | :---------------------------------------------------------- |
+| **Project**          | HPA++ — AI-Powered Predictive Auto Scaling & GPU Scheduling |
+| **Hackathon**        | AI Innovation Hackathon 2026 — Phase 1                      |
+| **Track**            | AI for Cluster Intelligence                                 |
+| **Team**             | Team Falah                                                  |
+| **Document Version** | 1.0                                                         |
 
 ---
 
@@ -35,27 +35,27 @@ HPA++ is an end-to-end system that replaces Kubernetes' reactive Horizontal Pod 
 
 ### System Components
 
-| # | Component | Owner |
-| :--- | :--- | :--- |
-| 1 | **Cluster Simulation Engine** | Developer 1 |
-| 2 | **Shared Schema Registry & Database** | Developer 1 |
-| 3 | **Forecasting Engine (Prophet)** | Developer 2 |
-| 4 | **Predictive Controller + GPU Scheduler** | Developer 2 |
-| 5 | **Live Monitoring Dashboard** | Developer 3 |
-| 6 | **Integration Layer, Contract Tests & Demo Harness** | Developer 3 |
+| #   | Component                                            | Owner   |
+| :-- | :--------------------------------------------------- | :------ |
+| 1   | **Cluster Simulation Engine**                        | Daiyaan |
+| 2   | **Shared Schema Registry & Database**                | Daiyaan |
+| 3   | **Forecasting Engine (Prophet)**                     | Farhan  |
+| 4   | **Predictive Controller + GPU Scheduler**            | Farhan  |
+| 5   | **Live Monitoring Dashboard**                        | Dristee |
+| 6   | **Integration Layer, Contract Tests & Demo Harness** | Dristee |
 
 ### Technology Stack
 
-| Layer | Technology |
-| :--- | :--- |
-| Languages | Python 3.x (all services), TypeScript/TSX (Dashboard if extending to web) |
-| ML / Forecasting | Facebook Prophet, pandas, NumPy, scikit-learn |
-| Dashboard | Streamlit + Plotly (primary), optionally React + recharts/d3 |
-| Simulation | Custom Python event loop, Locust for load generation |
-| Data / Persistence | SQLite (development), unified schemas via Pydantic (Python) / Zod (TS) |
-| Cluster Interface | Kubernetes API via `kubernetes` Python client (mocked in sim, real in production) |
-| Validation | Pydantic v2 (all Python boundaries), Zod (frontend boundaries) |
-| Testing | pytest, pytest-asyncio, Locust, contract tests |
+| Layer              | Technology                                                                        |
+| :----------------- | :-------------------------------------------------------------------------------- |
+| Languages          | Python 3.x (all services), TypeScript/TSX (Dashboard if extending to web)         |
+| ML / Forecasting   | Facebook Prophet, pandas, NumPy, scikit-learn                                     |
+| Dashboard          | Streamlit + Plotly (primary), optionally React + recharts/d3                      |
+| Simulation         | Custom Python event loop, Locust for load generation                              |
+| Data / Persistence | SQLite (development), unified schemas via Pydantic (Python) / Zod (TS)            |
+| Cluster Interface  | Kubernetes API via `kubernetes` Python client (mocked in sim, real in production) |
+| Validation         | Pydantic v2 (all Python boundaries), Zod (frontend boundaries)                    |
+| Testing            | pytest, pytest-asyncio, Locust, contract tests                                    |
 
 ---
 
@@ -67,17 +67,17 @@ HPA++ is an end-to-end system that replaces Kubernetes' reactive Horizontal Pod 
 
 **RULE 1.2 — Standard Casing & Explicit Units:** All JSON payloads and database columns must use `snake_case`. Every physical or temporal quantity variable MUST explicitly state its units in the name. Examples:
 
-| ✅ Correct | ❌ Incorrect |
-| :--- | :--- |
-| `cpu_utilization_pct` | `cpu_util` |
-| `memory_usage_mb` | `memory` |
-| `requests_per_second` | `rps` / `reqs` |
-| `latency_ms` | `latency` |
-| `gpu_utilization_pct` | `gpu_util` |
-| `timestamp_utc` | `timestamp` / `time` |
-| `forecast_upper_bound` | `upper` |
-| `risk_score` | `score` |
-| `pod_count` | `pods` |
+| ✅ Correct             | ❌ Incorrect         |
+| :--------------------- | :------------------- |
+| `cpu_utilization_pct`  | `cpu_util`           |
+| `memory_usage_mb`      | `memory`             |
+| `requests_per_second`  | `rps` / `reqs`       |
+| `latency_ms`           | `latency`            |
+| `gpu_utilization_pct`  | `gpu_util`           |
+| `timestamp_utc`        | `timestamp` / `time` |
+| `forecast_upper_bound` | `upper`              |
+| `risk_score`           | `score`              |
+| `pod_count`            | `pods`               |
 
 **RULE 1.3 — Boundary Validation is Mandatory:** Every incoming payload from another service must pass strict runtime schema validation. Python services use Pydantic v2 models. Frontend uses Zod. Unvalidated data must be rejected immediately at the boundary with a descriptive error. No `Any` / `dict` escape hatches.
 
@@ -85,11 +85,11 @@ HPA++ is an end-to-end system that replaces Kubernetes' reactive Horizontal Pod 
 
 **RULE 2.1 — Absolute Separation of Concerns:**
 
-| Team | Owns | Does NOT Touch |
-| :--- | :--- | :--- |
-| **Simulation** (Dev 1) | State generation, physics loops, metric emission, data persistence | ML heuristics, UI formatting |
+| Team                   | Owns                                                                        | Does NOT Touch                           |
+| :--------------------- | :-------------------------------------------------------------------------- | :--------------------------------------- |
+| **Simulation** (Dev 1) | State generation, physics loops, metric emission, data persistence          | ML heuristics, UI formatting             |
 | **Prediction** (Dev 2) | Feature extraction, model inference, scaling decision logic, GPU scheduling | Raw physics simulation, visual rendering |
-| **Frontend** (Dev 3) | Visualization, user input, real-time display, integration orchestration | Business logic, raw data transformations |
+| **Frontend** (Dev 3)   | Visualization, user input, real-time display, integration orchestration     | Business logic, raw data transformations |
 
 **RULE 2.2 — Zero Cross-Domain Trespassing:** If a feature requires logic in another domain, file a specification request — never build a placeholder for another team's work. Every module must function against mock outputs of its dependencies before integration.
 
@@ -153,11 +153,11 @@ HPA++ is an end-to-end system that replaces Kubernetes' reactive Horizontal Pod 
 
 ## 4. Developer Assignments
 
-| Developer | Role | Subtask 1 | Subtask 2 |
-| :--- | :--- | :--- | :--- |
-| **Sanzida Chowdhury Dristee** (Lead) | Simulation & Data | **S1:** Shared Schema Registry & Database Layer | **S2:** Cluster Simulation Engine |
-| **Daiyaan Muhammad Fardeen** | Prediction & Control | **S3:** Forecasting Engine (Prophet) | **S4:** Predictive Controller + GPU Scheduler |
-| **Ahmed Farhanur Rashid** | Frontend & Integration | **S5:** Live Monitoring Dashboard | **S6:** Integration Layer, Contract Tests & Demo Harness |
+| Developer                            | Role                   | Subtask 1                                       | Subtask 2                                                |
+| :----------------------------------- | :--------------------- | :---------------------------------------------- | :------------------------------------------------------- |
+| **Daiyaan Muhammad Fardeen**         | Simulation & Data      | **S1:** Shared Schema Registry & Database Layer | **S2:** Cluster Simulation Engine                        |
+| **Ahmed Farhanur Rashid**            | Prediction & Control   | **S3:** Forecasting Engine (Prophet)            | **S4:** Predictive Controller + GPU Scheduler            |
+| **Sanzida Chowdhury Dristee** (Lead) | Frontend & Integration | **S5:** Live Monitoring Dashboard               | **S6:** Integration Layer, Contract Tests & Demo Harness |
 
 ### Dependency Graph
 
@@ -169,6 +169,7 @@ S1 (Schema/DB) ──► S2 (Cluster Sim) ──► S3 (Forecast Eng) ──► 
 ```
 
 **Parallelism windows:**
+
 - S1 must complete first (all teams depend on schemas).
 - Once S1 schemas are published, S2, S3, and S5 can start in parallel (each operates against mock data).
 - S4 requires S3's forecast output shape (can develop against MockForecast output).
@@ -212,6 +213,7 @@ S1 (Schema/DB) ──► S2 (Cluster Sim) ──► S3 (Forecast Eng) ──► 
 5. **Unit tests** for schema validation, database CRUD, and boundary rejection of bad data.
 
 **Acceptance criteria:**
+
 - [ ] All schemas defined and tested (valid data accepted, invalid data rejected with clear errors)
 - [ ] `DatabaseManager` can create tables, insert records, query by time range, get latest
 - [ ] Verification: run `make db-init && pytest app/schemas/ -v` — all pass
@@ -261,6 +263,7 @@ S1 (Schema/DB) ──► S2 (Cluster Sim) ──► S3 (Forecast Eng) ──► 
    - Test mock services return correct schema shapes
 
 **Acceptance criteria:**
+
 - [ ] Simulation starts, runs N ticks, writes metric samples to DB
 - [ ] All traffic profiles produce distinguishable patterns (verify via plot or statistical test)
 - [ ] Pause/resume/stop work correctly
@@ -311,6 +314,7 @@ S1 (Schema/DB) ──► S2 (Cluster Sim) ──► S3 (Forecast Eng) ──► 
    - Test fallback behaviour with empty/incomplete data
 
 **Acceptance criteria:**
+
 - [ ] Prophet trains on 60+ metric samples and produces a 30-minute forecast
 - [ ] Forecast output contains `yhat`, `yhat_lower`, `yhat_upper` with sane intervals
 - [ ] Forecast saved to `forecast_windows` table in DB
@@ -342,6 +346,7 @@ S1 (Schema/DB) ──► S2 (Cluster Sim) ──► S3 (Forecast Eng) ──► 
    - Pod target bounds: `min_replicas ≤ target ≤ max_replicas` (from deployment config)
 
 2. **Scaling formula:**
+
    ```
    raw_target = ceil(forecast_yhat / baseline_per_pod)
    confidence_factor = clip((upper - lower) / yhat, 0, 1)  # 1 = very uncertain
@@ -388,6 +393,7 @@ S1 (Schema/DB) ──► S2 (Cluster Sim) ──► S3 (Forecast Eng) ──► 
    - Integration test: mock forecast → compute decision → write to DB
 
 **Acceptance criteria:**
+
 - [ ] Scaling formula produces deterministic, bounded results for all valid inputs
 - [ ] Confidence-aware logic widens/narrows target based on forecast certainty
 - [ ] GPU scheduler assigns N pods to M GPUs without exceeding any GPU's capacity
@@ -460,6 +466,7 @@ S1 (Schema/DB) ──► S2 (Cluster Sim) ──► S3 (Forecast Eng) ──► 
    - Verify data layer returns correct shapes even when DB tables are empty (graceful degradation)
 
 **Acceptance criteria:**
+
 - [ ] All 6 panels render correctly with live data from DB
 - [ ] Dashboard auto-refreshes and shows new data within 3s of DB write
 - [ ] Empty DB state shows graceful placeholders (no crashes, no infinite spinners)
@@ -519,13 +526,14 @@ S1 (Schema/DB) ──► S2 (Cluster Sim) ──► S3 (Forecast Eng) ──► 
    - `make demo-load` — launch with Locust load generation
    - `make lint` — ruff check
    - `make db-init` — initialise database
-   - `make clean` — remove db, __pycache__, temp files
+   - `make clean` — remove db, **pycache**, temp files
 
 7. **Documentation:**
    - `README.md` updated with architecture diagram, setup instructions, and demo walkthrough
    - Each component's `__init__.py` or `README.md` with quickstart
 
 **Acceptance criteria:**
+
 - [ ] All contract tests pass (each service produces correct schema-shaped outputs)
 - [ ] End-to-end pipeline test runs without errors in < 30s
 - [ ] `make demo` launches a running system with simulation, forecasts, decisions, and dashboard
@@ -834,12 +842,12 @@ Since all services communicate through the shared SQLite database, the "contract
 
 ### 7.1 Contract Matrix
 
-| Service | Writes To | Reads From | Contract Validates |
-| :--- | :--- | :--- | :--- |
-| Cluster Sim (S2) | `metric_samples`, `cluster_snapshots` | `simulation_config`, `scaling_decisions` | MetricSample, ClusterSnapshot |
-| Forecasting (S3) | `forecast_windows`, `forecast_metadata` | `metric_samples` | ForecastWindow |
-| Controller (S4) | `scaling_decisions`, `gpu_assignments`, `gpu_rebalance_events` | `forecast_windows`, `gpu_assignments`, `cluster_snapshots` | ScalingDecision, GpuAssignment |
-| Dashboard (S5) | (read-only) | All tables | N/A (read-only queries) |
+| Service          | Writes To                                                      | Reads From                                                 | Contract Validates             |
+| :--------------- | :------------------------------------------------------------- | :--------------------------------------------------------- | :----------------------------- |
+| Cluster Sim (S2) | `metric_samples`, `cluster_snapshots`                          | `simulation_config`, `scaling_decisions`                   | MetricSample, ClusterSnapshot  |
+| Forecasting (S3) | `forecast_windows`, `forecast_metadata`                        | `metric_samples`                                           | ForecastWindow                 |
+| Controller (S4)  | `scaling_decisions`, `gpu_assignments`, `gpu_rebalance_events` | `forecast_windows`, `gpu_assignments`, `cluster_snapshots` | ScalingDecision, GpuAssignment |
+| Dashboard (S5)   | (read-only)                                                    | All tables                                                 | N/A (read-only queries)        |
 
 ### 7.2 Contract Tests
 
@@ -1069,11 +1077,11 @@ def init_db(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 ### 9.2 Pipeline Modes
 
-| Mode | Description | Make Target |
-| :--- | :--- | :--- |
-| **data-only** | Sim writes metrics, stops. Forecast and controller run analytically. | `make run-data` |
-| **full-loop** | Sim runs, forecast runs every N ticks, controller runs every tick, dashboard polls. | `make demo` |
-| **benchmark** | Full-loop + Locust load generation. Compare HPA++ vs reactive HPA. | `make demo-load` |
+| Mode          | Description                                                                         | Make Target      |
+| :------------ | :---------------------------------------------------------------------------------- | :--------------- |
+| **data-only** | Sim writes metrics, stops. Forecast and controller run analytically.                | `make run-data`  |
+| **full-loop** | Sim runs, forecast runs every N ticks, controller runs every tick, dashboard polls. | `make demo`      |
+| **benchmark** | Full-loop + Locust load generation. Compare HPA++ vs reactive HPA.                  | `make demo-load` |
 
 ---
 
@@ -1081,34 +1089,34 @@ def init_db(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 ### Phase 1: Foundation (Days 1–2)
 
-| Day | Sanzida (S1→S2) | Daiyaan (S3→S4) | Ahmed (S5→S6) |
-| :--- | :--- | :--- | :--- |
-| **1** | S1: Schema definitions, DB layer, init script | S1: Review schemas, set up forecasting directory, install Prophet | S1: Review schemas, set up dashboard scaffolding |
-| **1** | S1: Pydantic models + unit tests | S3: Prophet wrapper + train/predict on synthetic data | S5: Streamlit app skeleton, DB reader |
-| **2** | S2: Cluster state model, basic node/pod simulation | S3: Feature extraction from DB, forecast pipeline | S5: Traffic + pod scaling panels |
-| **2** | S2: Metric generator, traffic profiles | S3: Fallback handling, model versioning | S5: GPU + decision log panels |
-| **Check** | S1 ✅, S2 basic tick ✅ | S3: train + predict on synthetic data ✅ | S5: panels render with mock data ✅ |
+| Day       | Sanzida (S1→S2)                                    | Daiyaan (S3→S4)                                                   | Ahmed (S5→S6)                                    |
+| :-------- | :------------------------------------------------- | :---------------------------------------------------------------- | :----------------------------------------------- |
+| **1**     | S1: Schema definitions, DB layer, init script      | S1: Review schemas, set up forecasting directory, install Prophet | S1: Review schemas, set up dashboard scaffolding |
+| **1**     | S1: Pydantic models + unit tests                   | S3: Prophet wrapper + train/predict on synthetic data             | S5: Streamlit app skeleton, DB reader            |
+| **2**     | S2: Cluster state model, basic node/pod simulation | S3: Feature extraction from DB, forecast pipeline                 | S5: Traffic + pod scaling panels                 |
+| **2**     | S2: Metric generator, traffic profiles             | S3: Fallback handling, model versioning                           | S5: GPU + decision log panels                    |
+| **Check** | S1 ✅, S2 basic tick ✅                            | S3: train + predict on synthetic data ✅                          | S5: panels render with mock data ✅              |
 
 ### Phase 2: Core Logic (Days 3–5)
 
-| Day | Sanzida | Daiyaan | Ahmed |
-| :--- | :--- | :--- | :--- |
-| **3** | S2: Simulation loop with pause/resume | S4a: PredictiveController compute_target_pods | S5: Simulation controls, auto-refresh |
-| **3** | S2: MockForecastStore + MockClusterState | S4a: Risk scoring, confidence-aware formula | S5: Dark theme, layout polish |
-| **4** | S2: Multiple deployments, GPU pool | S4a: ScaleExecutor (sim mode + dry-run) | S6: Contract test suite setup |
-| **4** | S2: Integration test with real DB | S4b: GPU scheduler, bin-packing algorithm | S6: Boundary tests (sim→forecast, forecast→controller) |
-| **5** | S2: Load generator integration (Locust) | S4b: GPU rebalancing, contention detection | S6: E2E pipeline test, Makefile targets |
-| **Check** | S2 ✅ | S4: formula validated + GPU sched tested ✅ | S6: contract + e2e tests pass ✅ |
+| Day       | Sanzida                                  | Daiyaan                                       | Ahmed                                                  |
+| :-------- | :--------------------------------------- | :-------------------------------------------- | :----------------------------------------------------- |
+| **3**     | S2: Simulation loop with pause/resume    | S4a: PredictiveController compute_target_pods | S5: Simulation controls, auto-refresh                  |
+| **3**     | S2: MockForecastStore + MockClusterState | S4a: Risk scoring, confidence-aware formula   | S5: Dark theme, layout polish                          |
+| **4**     | S2: Multiple deployments, GPU pool       | S4a: ScaleExecutor (sim mode + dry-run)       | S6: Contract test suite setup                          |
+| **4**     | S2: Integration test with real DB        | S4b: GPU scheduler, bin-packing algorithm     | S6: Boundary tests (sim→forecast, forecast→controller) |
+| **5**     | S2: Load generator integration (Locust)  | S4b: GPU rebalancing, contention detection    | S6: E2E pipeline test, Makefile targets                |
+| **Check** | S2 ✅                                    | S4: formula validated + GPU sched tested ✅   | S6: contract + e2e tests pass ✅                       |
 
 ### Phase 3: Integration & Polish (Days 6–7)
 
-| Day | Sanzida | Daiyaan | Ahmed |
-| :--- | :--- | :--- | :--- |
-| **6** | Polish sim: edge cases, error handling | Polish controller: edge cases, float precision | Wire everything: demo bootstrap script |
-| **6** | Test with all traffic profiles | Cross-boundary tests with real sim data | Test full pipeline end-to-end |
-| **7** | Bug fixes, README contributions | Bug fixes, README contributions | Demo walkthrough, Locust benchmarks |
-| **7** | **Hard freeze** — integration testing, bug fixes only | | |
-| **Demo** | Run `make demo` — present live system | | |
+| Day      | Sanzida                                               | Daiyaan                                        | Ahmed                                  |
+| :------- | :---------------------------------------------------- | :--------------------------------------------- | :------------------------------------- |
+| **6**    | Polish sim: edge cases, error handling                | Polish controller: edge cases, float precision | Wire everything: demo bootstrap script |
+| **6**    | Test with all traffic profiles                        | Cross-boundary tests with real sim data        | Test full pipeline end-to-end          |
+| **7**    | Bug fixes, README contributions                       | Bug fixes, README contributions                | Demo walkthrough, Locust benchmarks    |
+| **7**    | **Hard freeze** — integration testing, bug fixes only |                                                |                                        |
+| **Demo** | Run `make demo` — present live system                 |                                                |                                        |
 
 ---
 
@@ -1124,11 +1132,11 @@ def init_db(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 ### 11.2 Mock Strategy
 
-| Service | Mock Provided By | What It Returns |
-| :--- | :--- | :--- |
-| Metrics (for S3) | S2 MockForecastStore | Synthetic MetricSample rows in DB with realistic patterns |
-| Forecast (for S4) | S3 MockForecastStore (or S2 fallback) | ForecastWindow with yhat ± 20% of current metric |
-| Cluster State (for S5) | S2 MockClusterState | ClusterSnapshot with N nodes, M pods, basic GPU info |
+| Service                | Mock Provided By                      | What It Returns                                           |
+| :--------------------- | :------------------------------------ | :-------------------------------------------------------- |
+| Metrics (for S3)       | S2 MockForecastStore                  | Synthetic MetricSample rows in DB with realistic patterns |
+| Forecast (for S4)      | S3 MockForecastStore (or S2 fallback) | ForecastWindow with yhat ± 20% of current metric          |
+| Cluster State (for S5) | S2 MockClusterState                   | ClusterSnapshot with N nodes, M pods, basic GPU info      |
 
 ### 11.3 Demo Runbook
 
@@ -1170,29 +1178,29 @@ make benchmark -- --mode predictive
 
 ### 12.1 Per-Service Gates
 
-| Service | Gate | How to Verify |
-| :--- | :--- | :--- |
-| **Schema Registry** | All models defined, validated, unit tested | `pytest app/schemas/ -v` — all pass |
-| **Database** | Tables created, CRUD works, indices exist | `pytest app/db/ -v` — all pass |
-| **Simulation** | N ticks → N metric rows in DB, all profiles distinguishable | `python -m app.simulation.engine --ticks 60 --profile flash_sale && sqlite3 app/data/hpap.db 'SELECT count(*) FROM metric_samples'` |
-| **Forecasting** | Train + predict produces bounded forecast | `pytest app/forecasting/ -v` — tests pass |
-| **Controller** | Target pods in [min, max], deterministic formula | `pytest app/controller/ -v` — tests pass |
-| **GPU Scheduler** | No GPU overallocated, all pods assigned | `pytest app/controller/test_gpu_scheduler.py -v` |
-| **Dashboard** | All panels render, refresh works, empty DB doesn't crash | Manual: `streamlit run app/dashboard/app.py` |
-| **Integration** | Contract tests pass, E2E pipeline completes | `make test` — exit 0 |
+| Service             | Gate                                                        | How to Verify                                                                                                                       |
+| :------------------ | :---------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------- |
+| **Schema Registry** | All models defined, validated, unit tested                  | `pytest app/schemas/ -v` — all pass                                                                                                 |
+| **Database**        | Tables created, CRUD works, indices exist                   | `pytest app/db/ -v` — all pass                                                                                                      |
+| **Simulation**      | N ticks → N metric rows in DB, all profiles distinguishable | `python -m app.simulation.engine --ticks 60 --profile flash_sale && sqlite3 app/data/hpap.db 'SELECT count(*) FROM metric_samples'` |
+| **Forecasting**     | Train + predict produces bounded forecast                   | `pytest app/forecasting/ -v` — tests pass                                                                                           |
+| **Controller**      | Target pods in [min, max], deterministic formula            | `pytest app/controller/ -v` — tests pass                                                                                            |
+| **GPU Scheduler**   | No GPU overallocated, all pods assigned                     | `pytest app/controller/test_gpu_scheduler.py -v`                                                                                    |
+| **Dashboard**       | All panels render, refresh works, empty DB doesn't crash    | Manual: `streamlit run app/dashboard/app.py`                                                                                        |
+| **Integration**     | Contract tests pass, E2E pipeline completes                 | `make test` — exit 0                                                                                                                |
 
 ### 12.2 End-to-End Acceptance
 
-| # | Criterion | How to Verify |
-| :--- | :--- | :--- |
-| E2E-1 | System starts and runs without errors | `make demo` launches, no tracebacks |
-| E2E-2 | Dashboard shows live-updating data within 5s | Visual inspection |
+| #     | Criterion                                                | How to Verify                                                             |
+| :---- | :------------------------------------------------------- | :------------------------------------------------------------------------ |
+| E2E-1 | System starts and runs without errors                    | `make demo` launches, no tracebacks                                       |
+| E2E-2 | Dashboard shows live-updating data within 5s             | Visual inspection                                                         |
 | E2E-3 | Forecast appears before traffic spike (3+ min lead time) | Dashboard "actual vs predicted" chart shows forecast rising before actual |
-| E2E-4 | Scaling decision logged for every forecast cycle | Query: `SELECT count(*) FROM scaling_decisions` > 0 |
-| E2E-5 | GPU assignments respect capacity limits | Query: no assignment where sum(allocated) > total capacity per GPU |
-| E2E-6 | All contract tests pass | `make test-contracts` — exit 0 |
-| E2E-7 | All boundary tests pass | `make test-boundaries` — exit 0 |
-| E2E-8 | Full pipeline completes in < 30s | `make test-e2e` — runs under 30s |
+| E2E-4 | Scaling decision logged for every forecast cycle         | Query: `SELECT count(*) FROM scaling_decisions` > 0                       |
+| E2E-5 | GPU assignments respect capacity limits                  | Query: no assignment where sum(allocated) > total capacity per GPU        |
+| E2E-6 | All contract tests pass                                  | `make test-contracts` — exit 0                                            |
+| E2E-7 | All boundary tests pass                                  | `make test-boundaries` — exit 0                                           |
+| E2E-8 | Full pipeline completes in < 30s                         | `make test-e2e` — runs under 30s                                          |
 
 ### 12.3 Demo Presentation Checklist
 
@@ -1369,4 +1377,4 @@ clean:
 
 ---
 
-*End of specification sheet. Each developer should start by reading Section 5 (their subtasks), Section 6 (shared schemas), and Section 8 (database schema). All other sections provide context and integration requirements.*
+_End of specification sheet. Each developer should start by reading Section 5 (their subtasks), Section 6 (shared schemas), and Section 8 (database schema). All other sections provide context and integration requirements._
