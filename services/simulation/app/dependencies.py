@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.anomalies.engine import AnomalyEngine
 from app.engine import SimulationEngine
 from app.events import EventBroadcaster
 
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 engine_instance: SimulationEngine | None = None
 db_instance: DatabaseManager | None = None
 broadcaster_instance: EventBroadcaster | None = None
+anomaly_engine_instance: AnomalyEngine | None = None
 
 
 async def get_simulation_engine() -> SimulationEngine:

@@ -15,6 +15,7 @@ from shared.simulation import SimulationConfig, SimulatorStatus
 from app import dependencies as deps
 from app.dependencies import get_simulation_engine, get_db
 from app.events import CHANNEL_METRICS, CHANNEL_CLUSTER, CHANNEL_STATUS
+from app.anomalies import AnomalyDefinition, TriggerType
 from app.engine import SimulationEngine
 
 router = APIRouter()
@@ -281,6 +282,48 @@ async def update_simulation_config(
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
     return ApiResponse(data=engine.get_config())
+
+
+# ── Anomaly management ────────────────────────────────────────
+
+
+@router.get("/anomalies", response_model=ApiResponse[list[AnomalyDefinition]])
+async def list_anomalies():
+    """List all registered anomaly definitions."""
+    ae = deps.anomaly_engine_instance
+    if ae is None:
+        raise HTTPException(status_code=503, detail="Anomaly engine not initialised")
+    return ApiResponse(data=ae.get_definitions())
+
+
+@router.get("/anomalies/active", response_model=ApiResponse[list[dict]])
+async def list_active_anomalies():
+    """List currently active anomaly instances."""
+    ae = deps.anomaly_engine_instance
+    if ae is None:
+        raise HTTPException(status_code=503, detail="Anomaly engine not initialised")
+    return ApiResponse(data=ae.get_active())
+
+
+@router.post("/anomalies", response_model=ApiResponse[AnomalyDefinition])
+async def add_anomaly(definition: AnomalyDefinition):
+    """Register a new anomaly definition to be triggered."""
+    ae = deps.anomaly_engine_instance
+    if ae is None:
+        raise HTTPException(status_code=503, detail="Anomaly engine not initialised")
+    ae.add_definition(definition)
+    return ApiResponse(data=definition)
+
+
+@router.delete("/anomalies/{anomaly_id}")
+async def remove_anomaly(anomaly_id: str):
+    """Remove an anomaly definition (active instance continues until expiry)."""
+    ae = deps.anomaly_engine_instance
+    if ae is None:
+        raise HTTPException(status_code=503, detail="Anomaly engine not initialised")
+    if not ae.remove_definition(anomaly_id):
+        raise HTTPException(status_code=404, detail=f"Anomaly {anomaly_id!r} not found")
+    return ApiResponse(data={"removed": anomaly_id})
 
 
 # ── WebSocket event streams ────────────────────────────────────

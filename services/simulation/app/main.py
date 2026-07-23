@@ -17,6 +17,8 @@ from shared.simulation import (
     TrafficProfile,
 )
 from shared.enums import TrafficPattern, SimulatorStatus
+from app.anomalies.engine import AnomalyEngine
+import app.anomalies.handlers  # noqa: F401 — populates HANDLER_REGISTRY
 from app.engine import SimulationEngine
 from app.events import EventBroadcaster
 from app.metrics_generator import MetricsGenerator
@@ -111,9 +113,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     config = _default_config()
     metrics_gen = MetricsGenerator(seed=config.seed)
     broadcaster = EventBroadcaster()
-    engine = SimulationEngine(config, db, metrics_gen, broadcaster=broadcaster)
+    anomaly_engine = AnomalyEngine()
+    engine = SimulationEngine(
+        config, db, metrics_gen,
+        broadcaster=broadcaster,
+        anomaly_engine=anomaly_engine,
+    )
     dependencies.engine_instance = engine
     dependencies.broadcaster_instance = broadcaster
+    dependencies.anomaly_engine_instance = anomaly_engine
 
     yield
 

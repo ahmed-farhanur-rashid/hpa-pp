@@ -12,6 +12,7 @@ from shared.metrics import MetricSample
 from shared.cluster import DeploymentState, ClusterSnapshot
 from shared.simulation import TrafficProfile
 from shared.enums import TrafficPattern
+from app.anomalies.base import AnomalyEffect
 from app.traffic_profiles import PROFILE_REGISTRY
 
 
@@ -61,6 +62,7 @@ class MetricsGenerator:
         deployments: list[DeploymentState],
         cluster_state: ClusterSnapshot,
         simulated_time: float,
+        anomaly_effect: AnomalyEffect | None = None,
     ) -> list[MetricSample]:
         """Generate metric samples for all deployments at current time.
 
@@ -68,16 +70,35 @@ class MetricsGenerator:
             deployments: List of deployment states to generate metrics for.
             cluster_state: Current cluster snapshot for pod count context.
             simulated_time: Current simulation time in minutes.
+            anomaly_effect: Optional anomaly modifiers to distort metrics.
 
         Returns:
             list[MetricSample]: One MetricSample per deployment.
         """
+        extra_jitter = anomaly_effect.jitter if anomaly_effect else 0.0
         simulated_minute = simulated_time
         simulated_time_utc = self._BASE_UTC + timedelta(minutes=simulated_minute)
 
         batch: list[MetricSample] = []
 
         for deployment in deployments:
+            dep_id = deployment.deployment_id
+
+            # ── Anomaly: skip blocked deployments entirely ──
+            if anomaly_effect and dep_id in anomaly_effect.blocked_deployments:
+                sample = MetricSample(
+                    deployment_id=dep_id,
+                    simulated_time_utc=simulated_time_utc,
+                    cpu_utilization_pct=0.0,
+                    memory_usage_mb=0.0,
+                    requests_per_second=0.0,
+                    gpu_utilization_pct=None,
+                    latency_ms=None,
+                    pod_count=deployment.current_replicas,
+                )
+                batch.append(sample)
+                continue
+
             profile = self._deployment_profiles.get(deployment.deployment_id)
             if profile is None:
                 # No profile — generate zero/empty metrics
@@ -97,6 +118,10 @@ class MetricsGenerator:
             # Compute current RPS from traffic profile
             rps = self._get_current_rps(profile, simulated_minute)
 
+            # ── Anomaly: apply RPS multiplier ──
+            if anomaly_effect and dep_id in anomaly_effect.rps_multiplier:
+                rps *= anomaly_effect.rps_multiplier[dep_id]
+
             # Pod count from deployment state
             pod_count = max(1, deployment.current_replicas)
 
@@ -108,35 +133,52 @@ class MetricsGenerator:
             baseline_per_pod = 100.0
             cpu_util = self._compute_cpu_util(rps_per_pod, baseline_per_pod)
 
+            # ── Anomaly: apply CPU offset ──
+            if anomaly_effect and dep_id in anomaly_effect.cpu_offset_pp:
+                cpu_util += anomaly_effect.cpu_offset_pp[dep_id]
+                cpu_util = max(0.0, min(100.0, cpu_util))
+
             # Memory usage: logarithmic growth from base
             base_memory_mb = float(deployment.memory_request_mb) * 0.5
             memory_usage = self._compute_memory_usage(rps_per_pod, base_memory_mb)
 
+            # ── Anomaly: apply memory multiplier ──
+            if anomaly_effect and dep_id in anomaly_effect.memory_multiplier:
+                memory_usage *= anomaly_effect.memory_multiplier[dep_id]
+
             # GPU utilization: only if deployment requires GPU
             gpu_utilization = None
             if deployment.requires_gpu:
-                # GPU utilization loosely tracks CPU saturation, scaled to 0-100
-                gpu_utilization = self._add_noise(
-                    min(100.0, cpu_util * 0.9 + self.rng.uniform(0, 5)),
-                    profile.noise_std_pct,
-                )
-                gpu_utilization = max(0.0, min(100.0, gpu_utilization))
+                if anomaly_effect and dep_id in anomaly_effect.force_gpu_off:
+                    gpu_utilization = None
+                else:
+                    gpu_utilization = self._add_noise(
+                        min(100.0, cpu_util * 0.9 + self.rng.uniform(0, 5)),
+                        profile.noise_std_pct,
+                    )
+                    gpu_utilization = max(0.0, min(100.0, gpu_utilization))
 
             # Latency: derived from CPU saturation (higher CPU = higher latency)
             # Base latency ~5ms, grows exponentially as CPU approaches 100%
             base_latency_ms = 5.0
+            if anomaly_effect and anomaly_effect.latency_ms_absolute is not None:
+                base_latency_ms = anomaly_effect.latency_ms_absolute
             latency_ms = base_latency_ms * (1.0 + (cpu_util / 100.0) ** 3 * 19.0)
+            # ── Anomaly: apply latency multiplier ──
+            if anomaly_effect and dep_id in anomaly_effect.latency_multiplier:
+                latency_ms *= anomaly_effect.latency_multiplier[dep_id]
             latency_ms = self._add_noise(latency_ms, profile.noise_std_pct)
             latency_ms = max(0.0, latency_ms)
 
-            # Apply noise to CPU and memory
-            cpu_util = self._add_noise(cpu_util, profile.noise_std_pct)
+            # Noise + extra jitter from anomalies
+            effective_noise = profile.noise_std_pct + extra_jitter * 100.0
+            cpu_util = self._add_noise(cpu_util, effective_noise)
             cpu_util = max(0.0, min(100.0, cpu_util))
 
-            memory_usage = self._add_noise(memory_usage, profile.noise_std_pct)
+            memory_usage = self._add_noise(memory_usage, effective_noise)
             memory_usage = max(0.0, memory_usage)
 
-            rps = self._add_noise(rps, profile.noise_std_pct)
+            rps = self._add_noise(rps, effective_noise)
             rps = max(0.0, rps)
 
             sample = MetricSample(

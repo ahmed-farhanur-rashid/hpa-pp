@@ -12,6 +12,8 @@ from shared.simulation import SimulationConfig, SimulatorStatus
 from shared.metrics import MetricSample
 from shared.enums import PodStatus
 from shared.db.manager import DatabaseManager
+from app.anomalies.base import AnomalyEffect
+from app.anomalies.engine import AnomalyEngine
 from app.cluster_state import ClusterStateManager
 from app.events import EventBroadcaster, CHANNEL_METRICS, CHANNEL_CLUSTER, CHANNEL_STATUS
 from app.metrics_generator import MetricsGenerator
@@ -46,6 +48,7 @@ class SimulationEngine:
         db_manager: DatabaseManager,
         metrics_generator: MetricsGenerator,
         broadcaster: EventBroadcaster | None = None,
+        anomaly_engine: AnomalyEngine | None = None,
     ) -> None:
         """Initialize the simulation engine.
 
@@ -54,11 +57,13 @@ class SimulationEngine:
             db_manager: Database manager for persisting metrics and snapshots.
             metrics_generator: Metrics generator for producing simulated data.
             broadcaster: Optional event broadcaster for real-time WebSocket streaming.
+            anomaly_engine: Optional anomaly engine for failure injection.
         """
         self.config = config
         self.db_manager = db_manager
         self.metrics_generator = metrics_generator
         self.broadcaster = broadcaster
+        self.anomaly_engine = anomaly_engine
 
         # ── Runtime state ──
         self.status: SimulatorStatus = SimulatorStatus.STOPPED
@@ -272,12 +277,20 @@ class SimulationEngine:
         deployments = cluster.get_all_deployments()
         snapshot = cluster.get_snapshot()
 
-        # ── 3. Generate metrics from traffic profiles ──
+        # ── 3. Process active anomalies (may mutate cluster state) ──
+        anomaly_effect: AnomalyEffect | None = None
+        if self.anomaly_engine is not None and cluster is not None:
+            anomaly_effect = self.anomaly_engine.process_tick(
+                self.simulated_minutes, cluster,
+            )
+
+        # ── 4. Generate metrics from traffic profiles ├ anomalies ──
         samples = self.metrics_generator.generate_batch(
             deployments, snapshot, self.simulated_minutes,
+            anomaly_effect=anomaly_effect,
         )
 
-        # ── 4. Update pod resource usage from generated metrics ──
+        # ── 5. Update pod resource usage from generated metrics ──
         for sample in samples:
             try:
                 dep = cluster.get_deployment(sample.deployment_id)
