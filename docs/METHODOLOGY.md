@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary & Mathematical Architecture
 
-The **HPA++ Synthetic Telemetry Benchmark Suite** models multi-tenant Kubernetes cluster traffic and resource utilization over a 365-day period at 5-minute intervals ($105,120$ steps per cluster). 
+The **HPA++ Synthetic Telemetry Benchmark Suite** models multi-tenant Kubernetes cluster traffic and resource utilization over a 365-day period at 1-minute intervals ($525,600$ steps per cluster, $2,628,000$ combined benchmark steps). 
 
 Rather than using naive Gaussian noise or static sine waves, the generation engine combines **empirical parameters extracted from 4 real-world production traces** with **stochastic process equations** and **domain-specific failure injection models**.
 
@@ -84,7 +84,7 @@ To prevent models from overfitting to static, repeating mathematical curves, two
 
 ## 4. Operational Failure Injection System
 
-The generation engine simulates 365-day timelines ($105,120$ rows of 5-minute intervals) for each cluster profile. During this synthesis, it uses exponential distributions to determine the inter-arrival times of specific anomaly events, injecting 5 labeled anomaly flags to benchmark predictive failure handling:
+The generation engine simulates 365-day timelines ($525,600$ rows of 1-minute intervals) for each cluster profile. During this synthesis, it uses exponential distributions to determine the inter-arrival times of specific anomaly events, injecting 5 labeled anomaly flags to benchmark predictive failure handling:
 
 1. **Background Job Churn Spikes (`is_job_churn_spike`)**: High-frequency per-minute batch job bursts fitted from OpenPAI submission logs using a Pareto distribution ($b = 2.05$).
 2. **Flash Demand Surges (`is_flash_event_spike`)**: Asymmetric demand surges (15-min Gaussian rise, exponential decay) with peak multipliers $2.5\times - 5.0\times$.
@@ -103,7 +103,7 @@ $$\text{CPU}_t = \text{clip}\left(\frac{100}{1 + \exp(-(\text{Load}_t - 50)/12)}
 $$\text{GPU}_t = \text{clip}\left(20.0 + 55.0 \times \frac{\text{RPS}_t}{\text{MeanRPS} \times 1.8} \times w_{\text{gpu}} + \mathcal{N}(0, 1.8), \, 5.0, \, 98.5\right)$$
 
 ### Reactive HPA Pod Scaling Engine
-The generation pipeline simulates a sequential, stateful Kubernetes Horizontal Pod Autoscaler (HPA). For each 5-minute timestep $t$, the reactive HPA pod count ($P_t$) scales based on the previous step's CPU utilization ($T_{\text{cpu}} = 70\%$ target):
+The generation pipeline simulates a sequential, stateful Kubernetes Horizontal Pod Autoscaler (HPA). For each 1-minute timestep $t$, the reactive HPA pod count ($P_t$) scales based on the previous step's CPU utilization ($T_{\text{cpu}} = 70\%$ target):
 $$P_{\text{desired}} = \left\lceil P_{t-1} \times \left(\frac{\text{CPU}_{t-1}}{70.0}\right) \right\rceil$$
 $$P_t = \text{clip}\left(\begin{cases} P_{\text{desired}} & \text{if } P_{\text{desired}} > P_{t-1} \quad \text{(Scale Up)} \\ \max(P_{\text{desired}}, P_{t-1} - 2) & \text{if } P_{\text{desired}} \le P_{t-1} \quad \text{(Scale Down)} \end{cases}, \, 5, \, 120\right)$$
 * **Reactive Lag Simulation**: By calculating $P_{\text{desired}}$ strictly from $t-1$ utilization, and enforcing a maximum step-down rate, the engine natively generates a realistic **+3 step (+15 minute) lag delay** between load spikes and pod provision completion.

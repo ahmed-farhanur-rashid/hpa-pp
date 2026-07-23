@@ -9,11 +9,17 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 PARAMS_JSON = os.path.join(DATA_DIR, "extracted_parameters.json")
 
 def load_extracted_parameters():
-    if os.path.exists(PARAMS_JSON):
-        with open(PARAMS_JSON, "r") as f:
-            return json.load(f)
-    else:
-        raise FileNotFoundError(f"Parameters file not found at {PARAMS_JSON}. Run extract_real_parameters.py first.")
+    candidate_paths = [
+        PARAMS_JSON,
+        os.path.join(BASE_DIR, "data", "extracted_parameters.json"),
+        os.path.join(BASE_DIR, "hf_upload", "extracted_parameters.json"),
+        os.path.join(BASE_DIR, "extracted_parameters.json")
+    ]
+    for p in candidate_paths:
+        if os.path.exists(p):
+            with open(p, "r") as f:
+                return json.load(f)
+    raise FileNotFoundError(f"Parameters file not found in any candidate path ({candidate_paths}). Run extract_real_parameters.py first.")
 
 # ------------------------------------------------------------------------------
 # CLUSTER PROFILE PARAMETERS (Step 1)
@@ -26,7 +32,7 @@ CLUSTER_PROFILES = {
         "cpu_weight": 0.85,
         "churn_spike_lambda": 15.0,  # background job churn spikes/day
         "flash_spike_lambda": 0.35,  # flash sale events/day
-        "flash_duration_range": (12, 24), # 1 to 2 hours
+        "flash_duration_range": (60, 120), # 1 to 2 hours (60 to 120 mins)
         "flash_peak_range": (3.0, 5.0),
         "jitter_amplitude": 0.10,
     },
@@ -37,7 +43,7 @@ CLUSTER_PROFILES = {
         "cpu_weight": 0.95,
         "churn_spike_lambda": 8.0,
         "flash_spike_lambda": 0.08,  # ~2 large events per month
-        "flash_duration_range": (24, 48), # 2 to 4 hours
+        "flash_duration_range": (120, 240), # 2 to 4 hours
         "flash_peak_range": (4.5, 7.0),
         "jitter_amplitude": 0.05,
     },
@@ -48,7 +54,7 @@ CLUSTER_PROFILES = {
         "cpu_weight": 0.70,
         "churn_spike_lambda": 20.0,
         "flash_spike_lambda": 0.15,
-        "flash_duration_range": (18, 36), # 1.5 to 3 hours
+        "flash_duration_range": (90, 180), # 1.5 to 3 hours
         "flash_peak_range": (3.0, 6.0),
         "jitter_amplitude": 0.12,
     },
@@ -59,7 +65,7 @@ CLUSTER_PROFILES = {
         "cpu_weight": 1.00,
         "churn_spike_lambda": 10.0,
         "flash_spike_lambda": 0.50, # frequent exam session starts
-        "flash_duration_range": (12, 24), # 1 to 2 hours
+        "flash_duration_range": (60, 120), # 1 to 2 hours
         "flash_peak_range": (2.5, 4.0),
         "jitter_amplitude": 0.08,
     },
@@ -70,7 +76,7 @@ CLUSTER_PROFILES = {
         "cpu_weight": 0.60,
         "churn_spike_lambda": 25.0,
         "flash_spike_lambda": 0.20,
-        "flash_duration_range": (12, 36),
+        "flash_duration_range": (60, 180), # 1 to 3 hours
         "flash_peak_range": (2.5, 4.5),
         "jitter_amplitude": 0.15,
     }
@@ -83,7 +89,7 @@ def generate_cluster_dataset(
     cluster_name: str,
     days: int = 365,
     start_date: str = "2025-01-01",
-    freq: str = "5min",
+    freq: str = "1min",
     random_seed: int = 42,
     enable_jitter: bool = True
 ) -> pd.DataFrame:
@@ -91,7 +97,7 @@ def generate_cluster_dataset(
     params = load_extracted_parameters()
     prof = CLUSTER_PROFILES[cluster_name]
     
-    timestamps = pd.date_range(start=start_date, periods=days * 288, freq=freq)
+    timestamps = pd.date_range(start=start_date, periods=days * 1440, freq=freq)
     n_steps = len(timestamps)
     
     t_hours = (timestamps - timestamps[0]).total_seconds() / 3600.0
@@ -126,16 +132,16 @@ def generate_cluster_dataset(
     
     # 2. Stationary Mean-Reverting AR(1) Volatility
     ar1_params = params["cluster_volatility_ar1"]
-    phi_5min = ar1_params["ar1_5min_phi5"]
-    noise_std = ar1_params["residual_white_noise_std_5min"]
+    phi_1min = ar1_params["ar1_1min_phi1_full"]
+    noise_std = ar1_params["residual_white_noise_std_5min"] * 0.5
     nu_deg = ar1_params["student_t_degrees_of_freedom"]
     
     ar_noise = np.zeros(n_steps)
     white_shocks = np.random.normal(0, noise_std, n_steps)
     for i in range(1, n_steps):
-        ar_noise[i] = phi_5min * ar_noise[i-1] + white_shocks[i]
+        ar_noise[i] = phi_1min * ar_noise[i-1] + white_shocks[i]
         
-    heavy_tail = stats.t.rvs(df=nu_deg, loc=0, scale=0.005, size=n_steps)
+    heavy_tail = stats.t.rvs(df=nu_deg, loc=0, scale=0.003, size=n_steps)
     volatility = np.exp(np.clip(ar_noise + heavy_tail, -0.25, 0.25))
     rps = base_rps * volatility
     
@@ -152,7 +158,7 @@ def generate_cluster_dataset(
     num_flash_spikes = max(1, int(prof["flash_spike_lambda"] * days))
     flash_mult = np.ones(n_steps)
     flash_mask = np.zeros(n_steps, dtype=bool)
-    flash_centers = np.random.choice(np.arange(288, n_steps - 288), size=num_flash_spikes, replace=False)
+    flash_centers = np.random.choice(np.arange(1440, n_steps - 1440), size=num_flash_spikes, replace=False)
     
     for f_idx in flash_centers:
         duration = np.random.randint(*prof["flash_duration_range"])
@@ -187,11 +193,11 @@ def generate_cluster_dataset(
     overload_mult = np.ones(n_steps)
     mem_leak_bias = np.zeros(n_steps)
     
-    # (a) Partial Outage
+    # (a) Partial Outage (30 to 90 mins)
     num_outages = max(1, int(0.05 * days))
-    outage_centers = np.random.choice(np.arange(288, n_steps - 288), size=num_outages, replace=False)
+    outage_centers = np.random.choice(np.arange(1440, n_steps - 1440), size=num_outages, replace=False)
     for o_idx in outage_centers:
-        dur = np.random.randint(6, 18)
+        dur = np.random.randint(30, 90)
         drop = np.random.uniform(0.10, 0.30)
         end_idx = min(n_steps, o_idx + dur)
         t_drop = np.arange(end_idx - o_idx)
@@ -199,22 +205,22 @@ def generate_cluster_dataset(
         outage_mult[o_idx:end_idx] = ramp
         outage_mask[o_idx:end_idx] = True
         
-    # (b) Memory Leak
+    # (b) Memory Leak (2 to 6 hours = 120 to 360 mins)
     num_memleaks = max(1, int(0.03 * days))
-    memleak_centers = np.random.choice(np.arange(288, n_steps - 288), size=num_memleaks, replace=False)
+    memleak_centers = np.random.choice(np.arange(1440, n_steps - 1440), size=num_memleaks, replace=False)
     for m_idx in memleak_centers:
-        dur = np.random.randint(24, 72)
+        dur = np.random.randint(120, 360)
         end_idx = min(n_steps, m_idx + dur)
         t_leak = np.arange(end_idx - m_idx)
         leak_climb = 0.8 * (t_leak / len(t_leak)) * 50.0
         mem_leak_bias[m_idx:end_idx] = leak_climb
         memleak_mask[m_idx:end_idx] = True
         
-    # (c) Sustained Overload Plateau
+    # (c) Sustained Overload Plateau (2 to 6 hours)
     num_overloads = max(1, int(0.04 * days))
-    overload_centers = np.random.choice(np.arange(288, n_steps - 288), size=num_overloads, replace=False)
+    overload_centers = np.random.choice(np.arange(1440, n_steps - 1440), size=num_overloads, replace=False)
     for ov_idx in overload_centers:
-        dur = np.random.randint(24, 72)
+        dur = np.random.randint(120, 360)
         end_idx = min(n_steps, ov_idx + dur)
         overload_mult[ov_idx:end_idx] = 4.5
         overload_mask[ov_idx:end_idx] = True
@@ -234,7 +240,7 @@ def generate_cluster_dataset(
     mem_load[0] = mem_base
     for i in range(1, n_steps):
         target_mem = mem_base + (rps[i] / 70.0) + (concurrent_users[i] / 160.0) + mem_leak_bias[i]
-        decay = 0.995 if memleak_mask[i] else (0.985 if target_mem < mem_load[i-1] else 0.65)
+        decay = 0.998 if memleak_mask[i] else (0.995 if target_mem < mem_load[i-1] else 0.85)
         mem_load[i] = decay * mem_load[i-1] + (1.0 - decay) * target_mem
     memory_utilization_pct = np.clip(mem_load + np.random.normal(0, 0.7, n_steps), 10.0, 98.0)
     
@@ -245,7 +251,7 @@ def generate_cluster_dataset(
     gpu_utilization_pct = 20.0 + 55.0 * (rps / (mean_rps * 1.8)) * prof["gpu_weight"]
     gpu_utilization_pct = np.clip(gpu_utilization_pct + np.random.normal(0, 1.8, n_steps), 5.0, 98.5)
     
-    # 6. Kubernetes HPA Pod Scaling Engine (STRICT MAX_PODS = 120)
+    # 6. Kubernetes HPA Pod Scaling Engine (STRICT MAX_PODS = 120, 15-minute reactive lag)
     target_cpu_util = 70.0
     min_pods, max_pods = 5, 120
     
@@ -254,19 +260,20 @@ def generate_cluster_dataset(
     
     for i in range(1, n_steps):
         current_pods = active_pods[i-1]
-        desired = int(np.ceil(current_pods * (cpu_utilization_pct[i-1] / target_cpu_util)))
+        lag_idx = max(0, i - 15)
+        desired = int(np.ceil(current_pods * (cpu_utilization_pct[lag_idx] / target_cpu_util)))
         desired = np.clip(desired, min_pods, max_pods)
         
         if desired > current_pods:
             active_pods[i] = desired
         else:
-            active_pods[i] = max(desired, current_pods - 2)
+            active_pods[i] = max(desired, current_pods - 1)
 
     df = pd.DataFrame({
         "timestamp": timestamps,
         "cluster_name": cluster_name,
         "requests_per_second": np.round(rps, 2),
-        "requests_per_5min": np.round(rps * 300, 0).astype(int),
+        "requests_per_1min": np.round(rps * 60, 0).astype(int),
         "concurrent_users": np.round(concurrent_users, 0).astype(int),
         "cpu_utilization_pct": np.round(cpu_utilization_pct, 2),
         "memory_utilization_pct": np.round(memory_utilization_pct, 2),
@@ -285,20 +292,16 @@ def generate_cluster_dataset(
     return df
 
 # ------------------------------------------------------------------------------
-# STEP 4: DISTRIBUTION-SHIFTED TEST SET GENERATOR
+# STEP 4: DISTRIBUTION-SHIFTED TEST SET GENERATOR (1-MIN RESOLUTION)
 # ------------------------------------------------------------------------------
 def generate_shifted_test_dataset(days: int = 30, random_seed: int = 999) -> pd.DataFrame:
     """
-    Generates a 30-day held-out test set with deliberately shifted parameters:
-      - 35% higher baseline traffic
-      - 2.5x higher flash event frequency
-      - Inverted weekly seasonality multiplier
-    This evaluates model generalization vs overfitting.
+    Generates a 30-day held-out test set at 1-minute resolution with shifted parameters.
     """
     np.random.seed(random_seed)
     params = load_extracted_parameters()
     
-    timestamps = pd.date_range(start="2026-01-01", periods=days * 288, freq="5min")
+    timestamps = pd.date_range(start="2026-01-01", periods=days * 1440, freq="1min")
     n_steps = len(timestamps)
     
     t_hours = (timestamps - timestamps[0]).total_seconds() / 3600.0
@@ -317,9 +320,9 @@ def generate_shifted_test_dataset(days: int = 30, random_seed: int = 999) -> pd.
     num_spikes = int(0.50 * days)
     flash_mask = np.zeros(n_steps, dtype=bool)
     flash_mult = np.ones(n_steps)
-    centers = np.random.choice(np.arange(288, n_steps - 288), size=num_spikes, replace=False)
+    centers = np.random.choice(np.arange(1440, n_steps - 1440), size=num_spikes, replace=False)
     for c in centers:
-        dur = np.random.randint(12, 36)
+        dur = np.random.randint(60, 180)
         start, end = c, min(n_steps, c + dur)
         flash_mult[start:end] = np.random.uniform(3.0, 6.0)
         flash_mask[start:end] = True
@@ -336,14 +339,15 @@ def generate_shifted_test_dataset(days: int = 30, random_seed: int = 999) -> pd.
     active_pods = np.zeros(n_steps, dtype=int)
     active_pods[0] = 10
     for i in range(1, n_steps):
-        desired = int(np.ceil(active_pods[i-1] * (cpu[i-1] / 70.0)))
-        active_pods[i] = np.clip(desired if desired > active_pods[i-1] else active_pods[i-1] - 2, 5, 120)
+        lag_idx = max(0, i - 15)
+        desired = int(np.ceil(active_pods[i-1] * (cpu[lag_idx] / 70.0)))
+        active_pods[i] = np.clip(desired if desired > active_pods[i-1] else active_pods[i-1] - 1, 5, 120)
         
     df = pd.DataFrame({
         "timestamp": timestamps,
         "cluster_name": "shifted_test_cluster",
         "requests_per_second": np.round(rps, 2),
-        "requests_per_5min": np.round(rps * 300, 0).astype(int),
+        "requests_per_1min": np.round(rps * 60, 0).astype(int),
         "concurrent_users": np.round(users, 0).astype(int),
         "cpu_utilization_pct": np.round(cpu, 2),
         "memory_utilization_pct": np.round(mem, 2),
@@ -364,19 +368,23 @@ def generate_shifted_test_dataset(days: int = 30, random_seed: int = 999) -> pd.
 # ------------------------------------------------------------------------------
 # MAIN EXECUTION PIPELINE (Steps 1, 2, 3, 4)
 # ------------------------------------------------------------------------------
-def main():
+def main(output_dir: str = None):
+    out_dir = output_dir if output_dir else DATA_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    
     print("=" * 90)
-    print("EXECUTING PLAN V2 — MULTI-CLUSTER SYNTHETIC DATASET PIPELINE")
+    print("EXECUTING PLAN V2 (1-MIN RESOLUTION) — MULTI-CLUSTER SYNTHETIC DATASET PIPELINE")
+    print(f"Target Output Directory: {out_dir}")
     print("=" * 90)
     
     all_cluster_dfs = []
     
     for c_name, c_prof in CLUSTER_PROFILES.items():
-        print(f"\n---> Generating {c_name} cluster (365 days / 105,120 rows)...")
-        df_c = generate_cluster_dataset(cluster_name=c_name, days=365, random_seed=42 + len(all_cluster_dfs))
+        print(f"\n---> Generating {c_name} cluster (365 days / 525,600 rows)...")
+        df_c = generate_cluster_dataset(cluster_name=c_name, days=365, freq="1min", random_seed=42 + len(all_cluster_dfs))
         
         filename = f"synthetic_hpa_traffic_{c_name}_365d.csv"
-        out_path = os.path.join(DATA_DIR, filename)
+        out_path = os.path.join(out_dir, filename)
         df_c.to_csv(out_path, index=False)
         size_mb = os.path.getsize(out_path) / (1024 * 1024)
         
@@ -393,20 +401,23 @@ def main():
 
     # Concatenate all 5 clusters into combined dataset
     df_combined = pd.concat(all_cluster_dfs, ignore_index=True)
-    comb_path = os.path.join(DATA_DIR, "synthetic_hpa_traffic_all_clusters_365d.csv")
+    comb_path = os.path.join(out_dir, "synthetic_hpa_traffic_all_clusters_365d.csv")
     df_combined.to_csv(comb_path, index=False)
     comb_size = os.path.getsize(comb_path) / (1024 * 1024)
     print(f"\n---> [FILE WRITTEN]: Combined Dataset: {comb_path} ({comb_size:.2f} MB, {len(df_combined):,} total rows)")
 
     # Step 4: Generate Distribution-Shifted Test Set
-    print("\n---> Generating Distribution-Shifted Test Set (30 days / 8,640 rows)...")
+    print("\n---> Generating Distribution-Shifted Test Set (30 days / 43,200 rows)...")
     df_shifted = generate_shifted_test_dataset(days=30, random_seed=999)
-    shift_path = os.path.join(DATA_DIR, "synthetic_hpa_traffic_shifted_test.csv")
+    shift_path = os.path.join(out_dir, "synthetic_hpa_traffic_shifted_test.csv")
     df_shifted.to_csv(shift_path, index=False)
     shift_size = os.path.getsize(shift_path) / (1024 * 1024)
     print(f"  [FILE WRITTEN]: {shift_path} ({shift_size:.2f} MB, {len(df_shifted):,} rows)")
     
-    print("\n[SUCCESS] Steps 1, 2, 3, and 4 complete!")
+    print("\n[SUCCESS] 1-minute resolution dataset generation complete!")
 
 if __name__ == "__main__":
-    main()
+    import sys
+    target_dir = sys.argv[1] if len(sys.argv) > 1 else None
+    main(output_dir=target_dir)
+
