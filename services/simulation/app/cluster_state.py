@@ -51,6 +51,8 @@ class ClusterStateManager:
         self._node_counter: int = 0
         self._gpu_counter: int = 0
         self._node_gpu_alloc: dict[str, dict[str, str | None]] = {}
+        self.blocked_nodes: set[str] = set()
+        self.blocked_gpus: set[str] = set()
 
     def initialize(self) -> None:
         """Create initial cluster state from config.
@@ -213,6 +215,8 @@ class ClusterStateManager:
         for node_id, node in self.nodes.items():
             if node.status != NodeStatus.READY:
                 continue
+            if node_id in self.blocked_nodes:
+                continue
 
             free_cpu = node.total_cpu_millicores - node.allocated_cpu_millicores
             if free_cpu < pod.cpu_request_millicores:
@@ -302,6 +306,42 @@ class ClusterStateManager:
         target_deployment.pods = [
             p for p in target_deployment.pods if p.pod_id != pod_id
         ]
+
+    def block_node(self, node_id: str) -> list[PodState]:
+        """Mark a node as blocked and evict all its pods.
+
+        Evicted pods are returned so callers can store them; they
+        become Pending and can be re-scheduled when the node unblocks.
+
+        Args:
+            node_id: Node to block.
+
+        Returns:
+            list[PodState]: Pods that were evicted from this node.
+        """
+        if node_id not in self.nodes:
+            raise KeyError(f"Node {node_id} not found")
+        self.blocked_nodes.add(node_id)
+        node = self.nodes[node_id]
+        evicted = list(node.pods)
+        for pod in evicted:
+            self.remove_pod(pod.pod_id)
+        node.pods = []
+        node.allocated_cpu_millicores = 0
+        node.allocated_memory_mb = 0
+        return evicted
+
+    def unblock_node(self, node_id: str) -> None:
+        """Remove a node from the blocked set, allowing scheduling again."""
+        self.blocked_nodes.discard(node_id)
+
+    def block_gpu(self, gpu_id: str) -> None:
+        """Mark a GPU device as unavailable."""
+        self.blocked_gpus.add(gpu_id)
+
+    def unblock_gpu(self, gpu_id: str) -> None:
+        """Mark a GPU device as available again."""
+        self.blocked_gpus.discard(gpu_id)
 
     def update_pod_usage(
         self,
