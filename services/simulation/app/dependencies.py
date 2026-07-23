@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.engine import SimulationEngine
+from app.events import EventBroadcaster
 
 if TYPE_CHECKING:
     from shared.db.manager import DatabaseManager
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
 # ── Singleton instances ────────────────────────────────────────
 
 engine_instance: SimulationEngine | None = None
+db_instance: DatabaseManager | None = None
+broadcaster_instance: EventBroadcaster | None = None
 
 
 async def get_simulation_engine() -> SimulationEngine:
@@ -25,12 +28,12 @@ async def get_simulation_engine() -> SimulationEngine:
 
     Raises:
         RuntimeError: If engine has not been initialized (startup incomplete).
-
-    TODO:
-        - Add health check that verifies engine is responsive
-        - Support multiple engine instances for multi-sim scenarios
     """
-    ...
+    if engine_instance is None:
+        raise RuntimeError(
+            "Simulation engine not initialised. Call init_simulation() first."
+        )
+    return engine_instance
 
 
 async def get_db() -> DatabaseManager:
@@ -41,9 +44,9 @@ async def get_db() -> DatabaseManager:
 
     Raises:
         RuntimeError: If DB connection has not been established.
-
-    TODO:
-        - Ensure connection is alive before returning
-        - Add connection pooling support
     """
-    ...
+    if db_instance is None:
+        raise RuntimeError(
+            "Database not initialised. Call init_database() first."
+        )
+    return db_instance
