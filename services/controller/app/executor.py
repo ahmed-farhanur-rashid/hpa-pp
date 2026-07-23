@@ -1,14 +1,20 @@
 """
 Scaling execution module.
-
-Implements scaling execution in simulation, dry-run, and real
-Kubernetes modes, plus reactive fallback logic.
 """
+from __future__ import annotations
 
+import logging
+import math
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
-from shared.decisions import ScalingConfig, ScalingDecision
+import httpx
+
+from shared.decisions import ScalingAction, ScalingConfig, ScalingDecision
 from shared.metrics import MetricsSnapshot
+
+logger = logging.getLogger(__name__)
 
 
 class ScaleExecutor:
@@ -29,24 +35,26 @@ class ScaleExecutor:
     def __init__(
         self,
         mode: str = "simulation",
-        k8s_client: Optional[object] = None,
+        sim_base_url: str = "http://simulation:8001/api/v1",
     ) -> None:
         """Initialize ScaleExecutor.
 
         Args:
             mode: Execution mode (simulation, real_kubernetes, dry_run).
-            k8s_client: Kubernetes client instance for real mode.
+            sim_base_url: Base URL for the simulation API.
 
         Raises:
             ValueError: If mode is not a valid execution mode.
-            ValueError: If k8s_client is None when mode is real_kubernetes.
-
-        TODO:
-            - Validate mode against allowed values.
-            - Initialize Kubernetes client if not provided for real mode.
-            - Set up execution logging.
         """
-        ...
+        if mode not in (self.MODE_SIMULATION, self.MODE_REAL_K8S, self.MODE_DRY_RUN):
+            raise ValueError(
+                f"Invalid mode '{mode}'. Must be one of: "
+                f"{self.MODE_SIMULATION}, {self.MODE_REAL_K8S}, {self.MODE_DRY_RUN}"
+            )
+        self.mode = mode
+        self.sim_base_url = sim_base_url.rstrip("/")
+        self._http = httpx.AsyncClient(timeout=10.0)
+        self._log: list[dict] = []
 
     async def execute(self, decision: ScalingDecision) -> bool:
         """Execute a scaling decision.
@@ -59,19 +67,75 @@ class ScaleExecutor:
 
         Returns:
             bool: True if execution succeeded, False otherwise.
-
-        Raises:
-            RuntimeError: If execution mode is not properly configured.
-            ConnectionError: If Kubernetes API is unreachable (real mode).
-
-        TODO:
-            - Validate decision state (not already executed).
-            - Execute in configured mode.
-            - Record execution result.
-            - Emit execution metrics.
-            - Handle partial failures gracefully.
         """
-        ...
+        log_entry = {
+            "decision_id": decision.decision_id,
+            "deployment_id": decision.deployment_id,
+            "action": decision.action.value,
+            "target_replicas": decision.target_pod_count,
+            "current_replicas": decision.current_pod_count,
+            "mode": self.mode,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if self.mode == self.MODE_DRY_RUN:
+            log_entry["result"] = "dry_run_success"
+            self._log.append(log_entry)
+            logger.info(
+                "Dry-run execution for deployment %s: target=%d",
+                decision.deployment_id,
+                decision.target_pod_count,
+            )
+            return True
+
+        if self.mode == self.MODE_SIMULATION:
+            url = f"{self.sim_base_url}/sim/scale"
+            payload = {
+                "deployment_id": decision.deployment_id,
+                "target_replicas": decision.target_pod_count,
+                "execution_source": decision.execution_source,
+            }
+            try:
+                response = await self._http.post(url, json=payload)
+                response.raise_for_status()
+                log_entry["result"] = "simulation_success"
+                log_entry["status_code"] = response.status_code
+                self._log.append(log_entry)
+                logger.info(
+                    "Simulation scaling succeeded for deployment %s: target=%d",
+                    decision.deployment_id,
+                    decision.target_pod_count,
+                )
+                return True
+            except httpx.HTTPStatusError as exc:
+                log_entry["result"] = "simulation_failure"
+                log_entry["error"] = f"HTTP {exc.response.status_code}: {exc.response.text}"
+                self._log.append(log_entry)
+                logger.error(
+                    "Simulation scaling failed for deployment %s: HTTP %s",
+                    decision.deployment_id,
+                    exc.response.status_code,
+                )
+                return False
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                log_entry["result"] = "simulation_failure"
+                log_entry["error"] = str(exc)
+                self._log.append(log_entry)
+                logger.error(
+                    "Simulation scaling failed for deployment %s: %s",
+                    decision.deployment_id,
+                    exc,
+                )
+                return False
+
+        # MODE_REAL_K8S — not yet implemented
+        log_entry["result"] = "mode_not_implemented"
+        self._log.append(log_entry)
+        logger.warning(
+            "Real Kubernetes mode is not yet implemented. Deployment %s not scaled.",
+            decision.deployment_id,
+        )
+        return False
 
     async def rollback(self, decision: ScalingDecision) -> bool:
         """Rollback a previously executed scaling decision.
@@ -83,42 +147,94 @@ class ScaleExecutor:
 
         Returns:
             bool: True if rollback succeeded, False otherwise.
-
-        Raises:
-            RuntimeError: If decision has no rollback information.
-            ConnectionError: If Kubernetes API is unreachable (real mode).
-
-        TODO:
-            - Verify decision is eligible for rollback.
-            - Restore previous pod count.
-            - Record rollback event.
-            - Emit rollback metrics.
         """
-        ...
+        log_entry = {
+            "decision_id": decision.decision_id,
+            "deployment_id": decision.deployment_id,
+            "action": "rollback",
+            "target_replicas": decision.current_pod_count,
+            "current_replicas": decision.target_pod_count,
+            "mode": self.mode,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if self.mode == self.MODE_DRY_RUN:
+            log_entry["result"] = "dry_run_success"
+            self._log.append(log_entry)
+            logger.info(
+                "Dry-run rollback for deployment %s: restoring to %d",
+                decision.deployment_id,
+                decision.current_pod_count,
+            )
+            return True
+
+        if self.mode == self.MODE_SIMULATION:
+            url = f"{self.sim_base_url}/sim/scale"
+            payload = {
+                "deployment_id": decision.deployment_id,
+                "target_replicas": decision.current_pod_count,
+                "execution_source": decision.execution_source,
+            }
+            try:
+                response = await self._http.post(url, json=payload)
+                response.raise_for_status()
+                log_entry["result"] = "simulation_success"
+                log_entry["status_code"] = response.status_code
+                self._log.append(log_entry)
+                logger.info(
+                    "Simulation rollback succeeded for deployment %s: restored to %d",
+                    decision.deployment_id,
+                    decision.current_pod_count,
+                )
+                return True
+            except httpx.HTTPStatusError as exc:
+                log_entry["result"] = "simulation_failure"
+                log_entry["error"] = f"HTTP {exc.response.status_code}: {exc.response.text}"
+                self._log.append(log_entry)
+                logger.error(
+                    "Simulation rollback failed for deployment %s: HTTP %s",
+                    decision.deployment_id,
+                    exc.response.status_code,
+                )
+                return False
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                log_entry["result"] = "simulation_failure"
+                log_entry["error"] = str(exc)
+                self._log.append(log_entry)
+                logger.error(
+                    "Simulation rollback failed for deployment %s: %s",
+                    decision.deployment_id,
+                    exc,
+                )
+                return False
+
+        # MODE_REAL_K8S — not yet implemented
+        log_entry["result"] = "mode_not_implemented"
+        self._log.append(log_entry)
+        logger.warning(
+            "Real Kubernetes mode is not yet implemented. Deployment %s rollback skipped.",
+            decision.deployment_id,
+        )
+        return False
 
     def get_execution_log(
         self,
-        deployment_id: str,
+        deployment_id: str | None = None,
         limit: int = 50,
-    ) -> list[ScalingDecision]:
-        """Get execution history for a deployment.
+    ) -> list[dict]:
+        """Get execution history.
 
         Args:
-            deployment_id: Unique identifier for the deployment.
+            deployment_id: Optional deployment ID to filter by.
             limit: Maximum number of log entries to return.
 
         Returns:
-            list[ScalingDecision]: Execution log entries ordered by time.
-
-        Raises:
-            ValueError: If deployment_id is invalid.
-
-        TODO:
-            - Query execution log from database.
-            - Apply limit and ordering.
-            - Include execution status and timing.
+            list[dict]: Execution log entries ordered by time (most recent last).
         """
-        ...
+        filtered = self._log
+        if deployment_id is not None:
+            filtered = [entry for entry in self._log if entry.get("deployment_id") == deployment_id]
+        return filtered[-limit:]
 
 
 class ReactiveFallback:
@@ -139,12 +255,12 @@ class ReactiveFallback:
 
         Raises:
             ValueError: If threshold is not in [0, 100] range.
-
-        TODO:
-            - Validate threshold range.
-            - Load default config values.
         """
-        ...
+        if not 0.0 <= cpu_threshold_pct <= 100.0:
+            raise ValueError(
+                f"cpu_threshold_pct must be between 0 and 100, got {cpu_threshold_pct}"
+            )
+        self.cpu_threshold_pct = cpu_threshold_pct
 
     def evaluate(
         self,
@@ -161,14 +277,68 @@ class ReactiveFallback:
 
         Returns:
             Optional[ScalingDecision]: Scaling decision if needed, None otherwise.
-
-        Raises:
-            ValueError: If current_metrics is invalid.
-
-        TODO:
-            - Check if CPU exceeds threshold.
-            - Compute target pods based on threshold ratio.
-            - Respect min/max bounds from config.
-            - Return None if no scaling needed.
         """
-        ...
+        threshold = (
+            config.upscale_cpu_threshold_pct if config else self.cpu_threshold_pct
+        )
+        min_pods = config.min_replicas if config else 1
+        max_pods = config.max_replicas if config else 100
+        cpu = current_metrics.cpu_utilization_pct
+
+        # Scale-up: CPU exceeds threshold
+        if cpu > threshold:
+            scale_ratio = cpu / threshold
+            target = math.ceil(current_pods * scale_ratio)
+            target = max(min_pods, min(target, max_pods))
+            return ScalingDecision(
+                decision_id=str(uuid.uuid4()),
+                deployment_id=current_metrics.deployment_id,
+                simulated_time_utc=datetime.now(timezone.utc).isoformat(),
+                current_pod_count=current_pods,
+                target_pod_count=target,
+                action=ScalingAction.SCALE_UP,
+                forecast_id=None,
+                forecast_yhat=0.0,
+                forecast_lower=0.0,
+                forecast_upper=0.0,
+                risk_score=0.5,
+                confidence_score=0.0,
+                risk_level="medium",
+                formula_raw_target=float(target),
+                formula_confidence_factor=1.0,
+                formula_risk_bias=0.0,
+                formula_final_before_clamp=float(target),
+                executed=False,
+                execution_source="reactive_fallback",
+                reason=f"Reactive fallback: CPU {cpu:.1f}% exceeds threshold {threshold:.1f}%",
+            )
+
+        # Scale-down: CPU is below threshold with hysteresis band
+        if cpu < threshold - 10.0:
+            target = max(min_pods, math.floor(current_pods * 0.7))
+            target = max(min_pods, min(target, max_pods))
+            return ScalingDecision(
+                decision_id=str(uuid.uuid4()),
+                deployment_id=current_metrics.deployment_id,
+                simulated_time_utc=datetime.now(timezone.utc).isoformat(),
+                current_pod_count=current_pods,
+                target_pod_count=target,
+                action=ScalingAction.SCALE_DOWN,
+                forecast_id=None,
+                forecast_yhat=0.0,
+                forecast_lower=0.0,
+                forecast_upper=0.0,
+                risk_score=0.2,
+                confidence_score=0.0,
+                risk_level="low",
+                formula_raw_target=float(target),
+                formula_confidence_factor=1.0,
+                formula_risk_bias=0.0,
+                formula_final_before_clamp=float(target),
+                executed=False,
+                execution_source="reactive_fallback",
+                reason=f"Reactive fallback: CPU {cpu:.1f}% below hysteresis band {threshold - 10.0:.1f}%",
+            )
+
+        # Within hysteresis band — no action needed
+        return None
