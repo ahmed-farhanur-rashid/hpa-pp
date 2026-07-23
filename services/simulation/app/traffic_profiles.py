@@ -4,9 +4,13 @@ Each function computes a requests-per-second value at a given minute.
 Pure functions — no side effects, no state.
 """
 
+import math
+import random
 from collections.abc import Callable
 
 from shared.enums import TrafficPattern
+
+_random_walk_state: dict[str, float] = {}
 
 
 def steady_profile(
@@ -27,7 +31,7 @@ def steady_profile(
     TODO:
         - Add optional slight ramp-in for first N minutes
     """
-    ...
+    return max(0.0, float(base_rps))
 
 
 def sine_wave_profile(
@@ -52,7 +56,11 @@ def sine_wave_profile(
     TODO:
         - Support phase offset parameter
     """
-    ...
+    period_minutes: int = int(kwargs.get("period_minutes", 60))
+    spike_multiplier: float = float(kwargs.get("spike_multiplier", 1.0))
+    amplitude = base_rps * (spike_multiplier - 1.0) / 2.0
+    value = base_rps + amplitude * math.sin(2.0 * math.pi * current_minute / period_minutes)
+    return max(0.0, float(value))
 
 
 def step_spike_profile(
@@ -80,7 +88,12 @@ def step_spike_profile(
         - Support multiple spike windows
         - Add ramp-up/ramp-down at spike edges
     """
-    ...
+    spike_multiplier: float = float(kwargs.get("spike_multiplier", 5.0))
+    spike_minute: float = float(kwargs.get("spike_minute", 30))
+    spike_duration_minutes: float = float(kwargs.get("spike_duration_minutes", 10))
+    if spike_minute <= current_minute < spike_minute + spike_duration_minutes:
+        return max(0.0, float(base_rps * spike_multiplier))
+    return max(0.0, float(base_rps))
 
 
 def flash_sale_profile(
@@ -108,7 +121,16 @@ def flash_sale_profile(
         - Model pre-sale buildup
         - Add secondary smaller spikes
     """
-    ...
+    spike_multiplier: float = float(kwargs.get("spike_multiplier", 10.0))
+    spike_minute: float = float(kwargs.get("spike_minute", 60))
+    spike_duration_minutes: float = float(kwargs.get("spike_duration_minutes", 20))
+    if current_minute < spike_minute:
+        return max(0.0, float(base_rps))
+    if current_minute >= spike_minute + spike_duration_minutes:
+        return max(0.0, float(base_rps))
+    decay_factor = math.exp(-3.0 * (current_minute - spike_minute) / spike_duration_minutes)
+    value = base_rps + (base_rps * (spike_multiplier - 1.0) * decay_factor)
+    return max(0.0, float(value))
 
 
 def exam_start_profile(
@@ -136,7 +158,22 @@ def exam_start_profile(
         - Model intermittent spikes during exam (question submissions)
         - Add post-exam grading traffic bump
     """
-    ...
+    spike_multiplier: float = float(kwargs.get("spike_multiplier", 8.0))
+    spike_minute: float = float(kwargs.get("spike_minute", 30))
+    spike_duration_minutes: float = float(kwargs.get("spike_duration_minutes", 60))
+    ramp_up_minutes: float = 15.0
+    if current_minute < spike_minute:
+        return max(0.0, float(base_rps))
+    ramp_end = spike_minute + ramp_up_minutes
+    sustain_end = spike_minute + spike_duration_minutes
+    if current_minute < ramp_end:
+        progress = (current_minute - spike_minute) / ramp_up_minutes
+        value = base_rps + (base_rps * (spike_multiplier - 1.0) * progress)
+        return max(0.0, float(value))
+    if current_minute < sustain_end:
+        return max(0.0, float(base_rps * spike_multiplier))
+    value = base_rps + (base_rps * (spike_multiplier - 1.0) * math.exp(-2.0 * (current_minute - sustain_end) / 10.0))
+    return max(0.0, float(value))
 
 
 def random_walk_profile(
@@ -162,7 +199,16 @@ def random_walk_profile(
         - Maintain state between calls for continuity
         - Add mean-reversion strength parameter
     """
-    ...
+    noise_std_pct: float = float(kwargs.get("noise_std_pct", 5.0))
+    key = str(base_rps)
+    if key not in _random_walk_state:
+        _random_walk_state[key] = base_rps
+    current = _random_walk_state[key]
+    step = base_rps * (noise_std_pct / 100.0) * random.gauss(0, 1)
+    reversion = 0.05 * (base_rps - current)
+    current = current + step + reversion
+    _random_walk_state[key] = current
+    return max(0.0, float(current))
 
 
 # ── Profile registry ───────────────────────────────────────────

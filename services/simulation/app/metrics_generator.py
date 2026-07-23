@@ -4,10 +4,15 @@ Uses traffic profiles and cluster state to generate realistic
 metric data each simulation tick. Applies noise for realism.
 """
 
+import math
 import random
+from datetime import datetime, timedelta
 
 from shared.metrics import MetricSample
 from shared.cluster import DeploymentState, ClusterSnapshot
+from shared.simulation import TrafficProfile
+from shared.enums import TrafficPattern
+from app.traffic_profiles import PROFILE_REGISTRY
 
 
 class MetricsGenerator:
@@ -26,6 +31,9 @@ class MetricsGenerator:
         - Add error rate modeling
     """
 
+    # Base UTC time for converting simulated minutes to datetime
+    _BASE_UTC = datetime(2026, 1, 1, 0, 0, 0)
+
     def __init__(self, seed: int | None = None) -> None:
         """Initialize the metrics generator.
 
@@ -36,7 +44,17 @@ class MetricsGenerator:
             - Store seed for reproducibility logging
             - Initialize traffic profile registry
         """
-        ...
+        self.seed = seed
+        self.rng = random.Random(seed)
+        self._deployment_profiles: dict[str, TrafficProfile] = {}
+
+    def set_deployment_profiles(self, profiles: dict[str, TrafficProfile]) -> None:
+        """Set the traffic profile for each deployment.
+
+        Args:
+            profiles: Mapping of deployment_id to its TrafficProfile.
+        """
+        self._deployment_profiles = profiles
 
     def generate_batch(
         self,
@@ -53,19 +71,91 @@ class MetricsGenerator:
 
         Returns:
             list[MetricSample]: One MetricSample per deployment.
-
-        TODO:
-            - Look up traffic profile per deployment
-            - Compute RPS from profile
-            - Derive CPU/memory utilization from RPS
-            - Add noise to all values
-            - Set pod_count from deployment state
         """
-        ...
+        simulated_minute = simulated_time
+        simulated_time_utc = self._BASE_UTC + timedelta(minutes=simulated_minute)
+
+        batch: list[MetricSample] = []
+
+        for deployment in deployments:
+            profile = self._deployment_profiles.get(deployment.deployment_id)
+            if profile is None:
+                # No profile — generate zero/empty metrics
+                sample = MetricSample(
+                    deployment_id=deployment.deployment_id,
+                    simulated_time_utc=simulated_time_utc,
+                    cpu_utilization_pct=0.0,
+                    memory_usage_mb=0.0,
+                    requests_per_second=0.0,
+                    gpu_utilization_pct=None,
+                    latency_ms=None,
+                    pod_count=deployment.current_replicas,
+                )
+                batch.append(sample)
+                continue
+
+            # Compute current RPS from traffic profile
+            rps = self._get_current_rps(profile, simulated_minute)
+
+            # Pod count from deployment state
+            pod_count = max(1, deployment.current_replicas)
+
+            # RPS distributed across pods
+            rps_per_pod = rps / pod_count
+
+            # CPU utilization: non-linear saturation model
+            # baseline_per_pod represents the RPS at which a single pod hits ~100% CPU
+            baseline_per_pod = 100.0
+            cpu_util = self._compute_cpu_util(rps_per_pod, baseline_per_pod)
+
+            # Memory usage: logarithmic growth from base
+            base_memory_mb = float(deployment.memory_request_mb) * 0.5
+            memory_usage = self._compute_memory_usage(rps_per_pod, base_memory_mb)
+
+            # GPU utilization: only if deployment requires GPU
+            gpu_utilization = None
+            if deployment.requires_gpu:
+                # GPU utilization loosely tracks CPU saturation, scaled to 0-100
+                gpu_utilization = self._add_noise(
+                    min(100.0, cpu_util * 0.9 + self.rng.uniform(0, 5)),
+                    profile.noise_std_pct,
+                )
+                gpu_utilization = max(0.0, min(100.0, gpu_utilization))
+
+            # Latency: derived from CPU saturation (higher CPU = higher latency)
+            # Base latency ~5ms, grows exponentially as CPU approaches 100%
+            base_latency_ms = 5.0
+            latency_ms = base_latency_ms * (1.0 + (cpu_util / 100.0) ** 3 * 19.0)
+            latency_ms = self._add_noise(latency_ms, profile.noise_std_pct)
+            latency_ms = max(0.0, latency_ms)
+
+            # Apply noise to CPU and memory
+            cpu_util = self._add_noise(cpu_util, profile.noise_std_pct)
+            cpu_util = max(0.0, min(100.0, cpu_util))
+
+            memory_usage = self._add_noise(memory_usage, profile.noise_std_pct)
+            memory_usage = max(0.0, memory_usage)
+
+            rps = self._add_noise(rps, profile.noise_std_pct)
+            rps = max(0.0, rps)
+
+            sample = MetricSample(
+                deployment_id=deployment.deployment_id,
+                simulated_time_utc=simulated_time_utc,
+                cpu_utilization_pct=cpu_util,
+                memory_usage_mb=memory_usage,
+                requests_per_second=rps,
+                gpu_utilization_pct=gpu_utilization,
+                latency_ms=latency_ms,
+                pod_count=pod_count,
+            )
+            batch.append(sample)
+
+        return batch
 
     def _get_current_rps(
         self,
-        profile: dict,
+        profile: TrafficProfile,
         simulated_minute: float,
     ) -> float:
         """Compute current requests-per-second from traffic profile.
@@ -74,17 +164,23 @@ class MetricsGenerator:
         the profile's pattern type.
 
         Args:
-            profile: Traffic profile configuration dict.
+            profile: TrafficProfile configuration object.
             simulated_minute: Current simulation time in minutes.
 
         Returns:
             float: Current RPS value (always >= 0).
-
-        TODO:
-            - Support CUSTOM pattern with user-defined function
-            - Cache profile function lookups
         """
-        ...
+        profile_fn = PROFILE_REGISTRY[profile.pattern]
+        kwargs = {
+            "spike_multiplier": profile.spike_multiplier,
+            "noise_std_pct": profile.noise_std_pct,
+            "period_minutes": profile.period_minutes,
+            "spike_minute": profile.spike_minute,
+            "spike_duration_minutes": profile.spike_duration_minutes,
+            "trend_gradient": profile.trend_gradient,
+        }
+        rps = profile_fn(simulated_minute, profile.base_load_rps, **kwargs)
+        return max(0.0, float(rps))
 
     def _compute_cpu_util(
         self,
@@ -93,21 +189,26 @@ class MetricsGenerator:
     ) -> float:
         """Compute CPU utilization percentage from RPS.
 
-        Uses a simple linear model: CPU% = (rps / baseline) * 100.
-        Capped at 100%.
+        Uses a non-linear saturation model:
+        - Below baseline: sub-linear growth (power curve)
+        - At/above baseline: approaches 100% asymptotically
 
         Args:
             rps_per_pod: Requests per second handled by each pod.
-            baseline_per_pod: RPS at which CPU = 100%.
+            baseline_per_pod: RPS at which CPU ~ 100%.
 
         Returns:
             float: CPU utilization percentage (0.0 - 100.0).
-
-        TODO:
-            - Use non-linear model for saturation behavior
-            - Add per-deployment baseline configuration
         """
-        ...
+        if baseline_per_pod <= 0:
+            return 0.0
+
+        if rps_per_pod >= baseline_per_pod:
+            cpu = 80.0 + 20.0 * (1.0 - math.exp(-0.5 * (rps_per_pod - baseline_per_pod)))
+        else:
+            cpu = 100.0 * (rps_per_pod / baseline_per_pod) ** 0.7
+
+        return max(0.0, min(100.0, cpu))
 
     def _compute_memory_usage(
         self,
@@ -116,7 +217,8 @@ class MetricsGenerator:
     ) -> float:
         """Compute memory usage from RPS and base memory.
 
-        Memory grows sub-linearly with RPS to model real behavior.
+        Memory grows logarithmically with RPS to model real behavior.
+        Capped at 1.5x base memory to prevent runaway growth.
 
         Args:
             rps_per_pod: Requests per second per pod.
@@ -124,12 +226,9 @@ class MetricsGenerator:
 
         Returns:
             float: Memory usage in megabytes.
-
-        TODO:
-            - Model memory growth curve (logarithmic?)
-            - Add GC pause simulation
         """
-        ...
+        usage = base_memory_mb * min(1.5, 1.0 + 0.15 * math.log(1.0 + rps_per_pod / 5.0))
+        return max(0.0, usage)
 
     def _add_noise(self, value: float, noise_std_pct: float) -> float:
         """Add Gaussian noise to a metric value.
@@ -140,9 +239,8 @@ class MetricsGenerator:
 
         Returns:
             float: Noised value, clamped to >= 0.
-
-        TODO:
-            - Use log-normal noise for positive values
-            - Add temporal correlation (noise doesn't jump randomly)
         """
-        ...
+        if noise_std_pct <= 0:
+            return value
+        noise_value = self.rng.gauss(value, value * noise_std_pct / 100.0)
+        return max(0.0, noise_value)
