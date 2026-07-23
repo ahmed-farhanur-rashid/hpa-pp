@@ -5,12 +5,13 @@ import pandas as pd
 from scipy import stats
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DATA_REF_DIR = os.path.join(BASE_DIR, "data_ref")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 OUTPUT_JSON = os.path.join(DATA_DIR, "extracted_parameters.json")
 
 def extract_wikipedia_seasonality():
     """Extracts macro seasonality & trend parameters from train_by_site.csv."""
-    filepath = os.path.join(DATA_DIR, "train_by_site.csv")
+    filepath = os.path.join(DATA_REF_DIR, "train_by_site.csv")
     df = pd.read_csv(filepath)
     
     site_row = df[df["Site"] == "en.wikipedia.org"]
@@ -38,7 +39,7 @@ def extract_wikipedia_seasonality():
     f_weekly = max(0.0, 1.0 - (var_remainder / max(1e-6, var_total)))
     
     return {
-        "dataset_source": "train_by_site.csv (Kaggle Wikipedia Traffic)",
+        "dataset_source": "data_ref/train_by_site.csv (Kaggle Wikipedia Traffic)",
         "num_days_observed": len(traffic_series),
         "mean_daily_traffic": float(np.mean(traffic_series)),
         "std_daily_traffic": float(np.std(traffic_series)),
@@ -50,7 +51,7 @@ def extract_wikipedia_seasonality():
 
 def extract_cluster_volatility_and_ar1():
     """Extracts 1-min & 5-min AR(1) autocorrelation & Student-t noise parameters from all_datasets_by_timestamp.csv."""
-    filepath = os.path.join(DATA_DIR, "all_datasets_by_timestamp.csv")
+    filepath = os.path.join(DATA_REF_DIR, "all_datasets_by_timestamp.csv")
     df = pd.read_csv(filepath)
     
     df_active = df[(df["cpu_util_mean"] > 0) | (df["gpu_util_mean"] > 0)].copy()
@@ -83,7 +84,7 @@ def extract_cluster_volatility_and_ar1():
     noise_5min_std = float(np.std(res_5m[1:] - phi_5min * res_5m[:-1]))
     
     return {
-        "dataset_source": "all_datasets_by_timestamp.csv (Microsoft OpenPAI Traces)",
+        "dataset_source": "data_ref/all_datasets_by_timestamp.csv (Microsoft OpenPAI Traces)",
         "active_rows_analyzed": len(df_active),
         "idle_rows_excluded": int(len(df) - len(df_active)),
         "mean_active_cpu_pct": float(mean_cpu),
@@ -100,14 +101,14 @@ def extract_cluster_volatility_and_ar1():
 
 def extract_gpu_utilization_parameters():
     """Extracts normalized per-GPU utilization metrics from all_datasets_by_timestamp.csv."""
-    filepath = os.path.join(DATA_DIR, "all_datasets_by_timestamp.csv")
+    filepath = os.path.join(DATA_REF_DIR, "all_datasets_by_timestamp.csv")
     df = pd.read_csv(filepath)
     df_active = df[df["gpu_util_mean"] > 0].copy()
     
     per_gpu_util = (df_active["gpu_util_mean"] / df_active["gpu_active_mean"].replace(0, 1)).values
     
     return {
-        "dataset_source": "all_datasets_by_timestamp.csv (Microsoft OpenPAI Traces)",
+        "dataset_source": "data_ref/all_datasets_by_timestamp.csv (Microsoft OpenPAI Traces)",
         "raw_gpu_util_mean_max_pct": float(df["gpu_util_mean"].max()),
         "rows_exceeding_100pct_raw": int((df["gpu_util_mean"] > 100.0).sum()),
         "normalized_per_gpu_mean_pct": float(np.mean(per_gpu_util)),
@@ -119,14 +120,14 @@ def extract_gpu_utilization_parameters():
 
 def extract_multivariate_and_request_metrics():
     """Extracts QPS, request counts, and pod reporting stats from genai_trace_aggregated.csv."""
-    filepath = os.path.join(DATA_DIR, "genai_trace_aggregated.csv")
+    filepath = os.path.join(DATA_REF_DIR, "genai_trace_aggregated.csv")
     df = pd.read_csv(filepath)
     
     req_s = df["req_count_first"].dropna()
     pods_s = df["pods_reporting"].dropna()
     
     return {
-        "dataset_source": "genai_trace_aggregated.csv (GenAI Serving Trace)",
+        "dataset_source": "data_ref/genai_trace_aggregated.csv (GenAI Serving Trace)",
         "req_count_first_valid_rows": int(len(req_s)),
         "req_count_first_mean": float(req_s.mean()),
         "req_count_first_std": float(req_s.std()),
@@ -140,7 +141,7 @@ def extract_multivariate_and_request_metrics():
 
 def extract_two_spike_generators():
     """Extracts background job churn spikes (fitted) and defines flash-event demand spikes (assumption-based)."""
-    filepath = os.path.join(DATA_DIR, "all_datasets_by_timestamp.csv")
+    filepath = os.path.join(DATA_REF_DIR, "all_datasets_by_timestamp.csv")
     df = pd.read_csv(filepath)
     
     job_counts = df["job_count"].values
@@ -157,7 +158,7 @@ def extract_two_spike_generators():
     
     return {
         "background_job_churn_spikes_FITTED": {
-            "dataset_source": "all_datasets_by_timestamp.csv (Microsoft OpenPAI Job Jitter)",
+            "dataset_source": "data_ref/all_datasets_by_timestamp.csv (Microsoft OpenPAI Job Jitter)",
             "description": "High-frequency per-minute batch job submission bursts in a shared cluster",
             "spikes_per_day_lambda": float(spikes_per_day),
             "mean_spike_duration_minutes": float(np.mean(spike_durations) if len(spike_durations) > 0 else 3.2),
@@ -179,7 +180,7 @@ def extract_two_spike_generators():
 
 def main():
     print("=" * 90)
-    print("STARTING ENHANCED REAL PARAMETER EXTRACTION")
+    print("STARTING ENHANCED REAL PARAMETER EXTRACTION FROM data_ref/")
     print("=" * 90)
     
     params = {
@@ -190,6 +191,7 @@ def main():
         "spike_generators": extract_two_spike_generators()
     }
     
+    os.makedirs(DATA_DIR, exist_ok=True)
     with open(OUTPUT_JSON, "w") as f:
         json.dump(params, f, indent=2)
         
