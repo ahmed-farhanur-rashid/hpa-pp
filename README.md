@@ -14,11 +14,15 @@ services/
 │   │   ├── cluster_state.py     — Bin-packing pod scheduling, GPU tracking
 │   │   ├── metrics_generator.py — Non-linear CPU/memory/GPU/latency from RPS
 │   │   ├── traffic_profiles.py  — 7 traffic patterns (steady, sine, spike, …)
+│   │   ├── anomalies/           — 61 anomaly types for chaos injection
+│   │   │   ├── engine.py        — Anomaly lifecycle (check/apply/revert)
+│   │   │   ├── base.py          — AnomalyEffect, handler registry
+│   │   │   └── handlers/        — 9 domain files, one per failure class
 │   │   ├── routes.py            — REST API + WebSocket endpoints
 │   │   ├── events.py            — WebSocket event broadcaster
 │   │   ├── main.py              — FastAPI app factory with lifespan
 │   │   └── dependencies.py      — Singleton wiring
-│   └── tests/                   — 121 tests (unit + integration + WebSocket)
+│   └── tests/                   — 146 tests (unit + integration + WebSocket + anomalies)
 ├── forecasting/   — Prophet forecasting engine (FastAPI :8002) [WIP]
 ├── controller/    — Predictive controller + GPU scheduler (FastAPI :8003) [WIP]
 ├── integration/   — Integration layer (FastAPI :8000) [WIP]
@@ -78,6 +82,57 @@ async def stream():
             print(data["data"]["samples"])
 ```
 
+### Anomaly Injection (61 types)
+
+Inject realistic cluster failures into the simulation. Anomalies mutate cluster state and distort metrics via an `AnomalyEffect` pipeline each tick:
+
+```
+_tick_loop():
+  1. anomaly_engine.process_tick() → activates new, applies active, expires old
+  2. MetricsGenerator.generate_batch(anomaly_effect=effect)
+  3. DB persist + broadcast
+```
+
+**API:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/anomalies` | List all registered anomaly definitions |
+| GET | `/api/v1/anomalies/active` | List currently active anomalies |
+| POST | `/api/v1/anomalies` | Register a new anomaly definition |
+| DELETE | `/api/v1/anomalies/{id}` | Remove a definition (active expires naturally) |
+
+**Example — schedule a node failure at minute 60:**
+```bash
+curl -X POST http://localhost:8001/api/v1/anomalies \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "anomaly_id": "node0-crash",
+    "anomaly_type": "node_crash",
+    "target": "node-0",
+    "trigger_type": "scheduled",
+    "trigger_value": 60.0,
+    "duration_minutes": 15.0,
+    "severity": 1.0
+  }'
+```
+
+**Failure domains (61 anomalies across 9 categories):**
+
+| Domain | Count | Examples |
+|--------|-------|---------|
+| Node/CPU/RAM | 10 | node_crash, cpu_throttle, memory_leak, ram_corruption |
+| GPU | 10 | gpu_xid_error, gpu_oom, gpu_ecc_cascade, gpu_nvlink_failure |
+| Network | 8 | network_partition, packet_loss, dns_failure, lb_failure |
+| Storage | 5 | pv_failure, iops_throttle, disk_full, quota_exceeded |
+| Pod/Container | 8 | crash_loop, oom_kill, liveness_fail, sidecar_crash |
+| Deploy/Config | 6 | rollout_fail, config_drift, affinity_violation |
+| Traffic/Load | 6 | traffic_spike, load_imbalance, thundering_herd |
+| Control Plane | 4 | api_server_slow, scheduler_fail, etcd_slow |
+| Security | 4 | crypto_miner, data_exfil, rbac_break, cert_expiry |
+
+Each anomaly applies handlers that either mutate `ClusterStateManager` (evict pods, block nodes) or return metric modifiers (RPS multipliers, CPU offsets, latency overrides). Effects merge across concurrent anomalies.
+
 ### Traffic Profiles
 
 | Pattern | Description |
@@ -112,14 +167,15 @@ cd /path/to/HPA-pp
 PYTHONPATH=. python -m pytest services/simulation/tests/ -v
 ```
 
-**121 tests** covering:
+**146 tests** covering:
 - Database CRUD (init, insert, query, upsert, insert_many)
 - Traffic profiles (all 7 patterns, registry, edge cases)
 - Cluster state (node ops, pod scheduling, GPU tracking, scaling, snapshots)
 - Metrics generator (CPU/memory/GPU/latency models, noise, ranges)
 - Engine lifecycle (start/pause/resume/stop, tick loop, completion)
-- REST API (12 endpoints, error handling, CORS)
+- REST API (12 endpoints, error handling, CORS, anomaly CRUD)
 - WebSocket (broadcaster, 3 channels, multiple clients, disconnect recovery)
+- Anomaly engine (activation, expiry, revert, merge, 61 handler registration, integration)
 
 ## Development
 
