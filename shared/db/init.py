@@ -173,7 +173,12 @@ def get_db_path() -> Path:
 
     TODO: Add support for PostgreSQL via environment variable.
     """
-    ...
+    import os
+
+    env_path = os.environ.get("HPAP_DB_PATH")
+    if env_path:
+        return Path(env_path)
+    return DEFAULT_DB_PATH
 
 
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
@@ -197,4 +202,12 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
         - Add migration system (version tracking table)
         - Add PostgreSQL support for production deployments
     """
-    ...
+    resolved = db_path or get_db_path()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(resolved), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(SCHEMA_SQL)
+    conn.commit()
+    return conn
