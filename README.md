@@ -23,7 +23,7 @@ services/
 │   │   ├── main.py              — FastAPI app factory with lifespan
 │   │   └── dependencies.py      — Singleton wiring
 │   └── tests/                   — 146 tests (unit + integration + WebSocket + anomalies)
-├── forecasting/   — Prophet forecasting engine (FastAPI :8002) [WIP]
+├── forecasting/   — Multivariate prediction engine — Prophet/CTGAN/Transformer (FastAPI :8002) [WIP]
 ├── controller/    — Predictive controller + GPU scheduler (FastAPI :8003) [WIP]
 ├── integration/   — Integration layer (FastAPI :8000) [WIP]
 └── dashboard/     — Streamlit dashboard (:8501) [WIP]
@@ -38,6 +38,9 @@ shared/
 ├── simulation.py  — SimulationConfig, DeploymentSpec, TrafficProfile models
 ├── enums.py       — PodStatus, TrafficPattern, RiskLevel, ScalingAction
 └── base.py        — BaseModel config, timestamp mixins
+
+data/
+└── synthetic_hpa_traffic_all_clusters_365d.csv  — 525K rows, 5 clusters, 365 days
 ```
 
 ## Simulation Service
@@ -176,6 +179,124 @@ PYTHONPATH=. python -m pytest services/simulation/tests/ -v
 - REST API (12 endpoints, error handling, CORS, anomaly CRUD)
 - WebSocket (broadcaster, 3 channels, multiple clients, disconnect recovery)
 - Anomaly engine (activation, expiry, revert, merge, 61 handler registration, integration)
+
+## Prediction Engine Contract
+
+The forecasting service (`services/forecasting/`) predicts **multivariate system state** — not just RPS. Every model (Prophet, CTGAN, transformer, naive fallback) produces the same output shape. The controller and dashboard never touch the underlying model.
+
+### Training Data
+
+`data/synthetic_hpa_traffic_all_clusters_365d.csv` — 525K rows, 5 clusters (ecommerce, exam_system, genai_inference, streaming, university_portal), 365 days of 5-minute interval metrics with labeled anomaly events:
+
+| Feature | Type | Consumer |
+|---------|------|----------|
+| `requests_per_second` | float | Controller → pod target |
+| `cpu_utilization_pct` | float | Controller → reactive fallback; Dashboard |
+| `gpu_utilization_pct` | float | GPU scheduler → rebalance decisions |
+| `gpus_in_use` | int | GPU scheduler → capacity planning |
+| `active_pods` | int | Controller → sanity check |
+| `concurrent_users` | float | Dashboard |
+| `requests_per_5min` | float | Dashboard (smoothed) |
+| `is_flash_event_spike` | bool | Dashboard → anomaly highlight |
+| `is_outage_event` | bool | Dashboard → anomaly highlight |
+| `is_memleak_event` | bool | Dashboard → anomaly highlight |
+
+### Output — the `ForecastTrajectory` schema
+
+Every endpoint returns this shape. The `features` dict keys are column names from the training data — a CTGAN model might predict all 17, Prophet might only predict `requests_per_second`.
+
+```json
+{
+  "forecast_id": "f47ac10b-...",
+  "deployment_id": "web-app",
+  "model_type": "ctgan",
+  "features_predicted": ["requests_per_second", "cpu_utilization_pct",
+                         "gpu_utilization_pct", "active_pods"],
+  "points": [
+    {
+      "minute": 21,
+      "features": {
+        "requests_per_second": { "value": 145.2 },
+        "cpu_utilization_pct": { "value": 45.0 },
+        "gpu_utilization_pct": { "value": 24.5 },
+        "active_pods": { "value": 5 }
+      }
+    }
+  ],
+  "summary": {
+    "peak_requests_per_second": { "value": 198.3 },
+    "peak_gpu_utilization_pct": { "value": 65.0 },
+    "trend": "rising",
+    "volatility": 0.15,
+    "uncertainty_pct": null
+  },
+  "quality": {
+    "status": "success",
+    "rmse": {"requests_per_second": 12.3, "cpu_utilization_pct": 4.5},
+    "mape_pct": {"requests_per_second": 6.2}
+  }
+}
+```
+
+### How each consumer reads it
+
+**Controller** (`services/controller/app/scaler.py`):
+```python
+peak = forecast["summary"]["peak_requests_per_second"]["value"]
+raw_target = ceil(peak / config.baseline_per_pod)  # "Pods needed at peak"
+
+# Risk-aware bias from confidence (if available)
+upper = forecast["points"][0]["features"]["requests_per_second"].get("upper")
+if upper:
+    ci_width = (upper - lower) / value
+    risk_bias = ci_width * config.risk_asymmetry_factor
+else:
+    risk_bias = config.risk_asymmetry_factor * 0.2  # neutral default
+
+# Trend urgency
+if forecast["summary"]["trend"] == "rising":
+    risk_bias += 1.0  # "Getting worse — scale proactively"
+
+final = clamp(raw_target + risk_bias, config.min_replicas, config.max_replicas)
+```
+
+**GPU scheduler** (`services/controller/app/gpu_scheduler.py`):
+```python
+peak_gpu = forecast["summary"].get("peak_gpu_utilization_pct")
+if peak_gpu and peak_gpu["value"] > 80.0:
+    gpu_scheduler.rebalance(trigger_reason="predicted_gpu_overcommit")
+```
+
+**Dashboard** (`services/dashboard/app/main.py`):
+```python
+rps_values = [p["features"]["requests_per_second"]["value"] for p in points]
+cpu_values = [p["features"]["cpu_utilization_pct"]["value"] for p in points]
+gpu_values = [p["features"]["gpu_utilization_pct"]["value"] for p in points]
+# Plot all three on their respective panels
+```
+
+### Fallback chain
+
+| Data available | `quality.status` | Controller behavior |
+|----------------|------------------|---------------------|
+| ≥60 min history | `success` | Full predictive + risk-aware |
+| 10–59 min      | `success` | Wider confidence → higher risk bias |
+| <10 min        | `fallback` | Naive forecast (flat at last value). Controller sets `risk_asymmetry_factor × 2` |
+| No data        | `failed` | Reactive fallback only (CPU threshold-based) |
+
+The controller checks `quality.status` every evaluation cycle and adjusts its behaviour automatically.
+
+### API Endpoints (forecasting service, `:8002`)
+
+| Method | Path | Returns |
+|--------|------|---------|
+| GET | `/api/v1/forecast/trajectory?deployment_id=X&horizon_minutes=30` | `ForecastTrajectory` |
+| GET | `/api/v1/forecast/latest?deployment_id=X` | Single-point forecast |
+| POST | `/api/v1/forecast/run` | Trigger one prediction cycle |
+
+The ML engineer chooses the model (Prophet, CTGAN, transformer, or ensemble).
+The controller, GPU scheduler, and dashboard teams build against this schema
+using the naive fallback until the real model is ready.
 
 ## Development
 
