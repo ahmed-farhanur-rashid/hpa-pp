@@ -170,15 +170,24 @@ cd /path/to/HPA-pp
 PYTHONPATH=. python -m pytest services/simulation/tests/ -v
 ```
 
-**146 tests** covering:
+**214 tests** covering:
 - Database CRUD (init, insert, query, upsert, insert_many)
 - Traffic profiles (all 7 patterns, registry, edge cases)
-- Cluster state (node ops, pod scheduling, GPU tracking, scaling, snapshots)
+- Cluster state (node ops, pod scheduling, GPU tracking, scaling, snapshots, GPU assignment)
 - Metrics generator (CPU/memory/GPU/latency models, noise, ranges)
 - Engine lifecycle (start/pause/resume/stop, tick loop, completion)
-- REST API (12 endpoints, error handling, CORS, anomaly CRUD)
+- REST API (14 endpoints, error handling, CORS, anomaly CRUD, scale, GPU assign)
 - WebSocket (broadcaster, 3 channels, multiple clients, disconnect recovery)
 - Anomaly engine (activation, expiry, revert, merge, 61 handler registration, integration)
+- PredictiveController (peak extraction, confidence, risk, action, fallbacks)
+- ScaleExecutor (simulation/dry-run, error recovery, rollback)
+- ReactiveFallback (CPU threshold, hysteresis edge cases)
+- GpuScheduler (bin-pack/spread strategies, contention, rebalance, edge cases)
+- Sim+Controller integration (full evaluate→persist→execute pipeline with mocked forecasts)
+- Sim+Anomaly integration (metrics distortion, scheduling with blocked nodes)
+- Controller route smoke tests (evaluate + GPU assign HTTP endpoints)
+
+Total: **155 simulation + 59 controller = 214 passing tests**
 
 ## Prediction Engine Contract
 
