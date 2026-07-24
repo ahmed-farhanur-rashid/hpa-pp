@@ -44,11 +44,11 @@ def main():
     parser.add_argument("--context_features", nargs="+", default=CONTEXT_FEATURES,
                          help="Input-only columns: used as context, never forecast.")
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--batch_size", type=int, default=2048)
     parser.add_argument("--input_window", type=int, default=120)
     parser.add_argument("--horizon", type=int, default=15)
     parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=1.2e-3)
     parser.add_argument("--out", type=str, default=DEFAULT_OUT)
     args = parser.parse_args()
 

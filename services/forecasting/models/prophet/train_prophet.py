@@ -62,6 +62,8 @@ def rolling_eval(df: pd.DataFrame, feature: str, horizon: int, input_window: int
             weekly_seasonality=True,
             yearly_seasonality=False,
             interval_width=0.8,
+            n_changepoints=10,
+            uncertainty_samples=100,
         )
         m.fit(train_slice)
 

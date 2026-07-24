@@ -69,9 +69,11 @@ def train(args):
 
     num_workers = min(4, os.cpu_count() or 1)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                               drop_last=True, num_workers=num_workers, pin_memory=True)
+                               drop_last=True, num_workers=num_workers, pin_memory=True,
+                               persistent_workers=True, prefetch_factor=4)
     val_loader = DataLoader(val_ds, batch_size=min(args.batch_size, len(val_ds)),
-                             shuffle=False, num_workers=num_workers, pin_memory=True)
+                             shuffle=False, num_workers=num_workers, pin_memory=True,
+                             persistent_workers=True)
 
     cfg = PatchTSTConfig(
         n_features=len(feature_cols), input_window=args.input_window,
@@ -82,6 +84,13 @@ def train(args):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = PatchTST(cfg).to(device)
+
+    # GPU optimizations
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    if hasattr(torch, "compile"):
+        model = torch.compile(model, mode="reduce-overhead")
+
     from rich.console import Console
     from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
     from rich.table import Table
@@ -204,8 +213,8 @@ if __name__ == "__main__":
     p.add_argument("--d_model", type=int, default=128)
     p.add_argument("--n_heads", type=int, default=4)
     p.add_argument("--n_layers", type=int, default=3)
-    p.add_argument("--batch_size", type=int, default=64)
-    p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--batch_size", type=int, default=8192)
+    p.add_argument("--lr", type=float, default=1.1e-3)
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--patience", type=int, default=5)
     p.add_argument("--out", type=str, default=DEFAULT_OUT)

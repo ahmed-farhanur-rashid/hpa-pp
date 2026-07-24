@@ -107,14 +107,22 @@ class PSANetForecaster(BaseForecaster):
         num_workers = min(4, os.cpu_count() or 1)
         train_loader = torch.utils.data.DataLoader(
             train_ds, batch_size=batch_size, shuffle=True, drop_last=True,
-            num_workers=num_workers, pin_memory=True,
+            num_workers=num_workers, pin_memory=True, persistent_workers=True,
+            prefetch_factor=4,
         )
         val_loader = torch.utils.data.DataLoader(
             val_ds, batch_size=min(batch_size, len(val_ds)), shuffle=False,
-            num_workers=num_workers, pin_memory=True,
+            num_workers=num_workers, pin_memory=True, persistent_workers=True,
         )
 
         self.model = PSANet(cfg).to(self.device)
+
+        # GPU optimizations
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        if hasattr(torch, "compile"):
+            self.model = torch.compile(self.model, mode="reduce-overhead")
+
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr * 0.01)
         scaler = GradScaler(enabled=self.device.type == "cuda")

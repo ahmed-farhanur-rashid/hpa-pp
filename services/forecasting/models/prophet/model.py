@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Any
 import pandas as pd
 from prophet import Prophet
@@ -14,11 +15,31 @@ if MODELS_DIR not in sys.path:
 from base_model import BaseForecaster
 
 
+def _fit_single_feature(args):
+    """Fit a single Prophet model. Designed for multiprocessing."""
+    sub_df, feature_col, interval_width = args
+    m = Prophet(
+        daily_seasonality=True,
+        weekly_seasonality=True,
+        yearly_seasonality=False,
+        interval_width=interval_width,
+        n_changepoints=10,
+        uncertainty_samples=100,
+    )
+    m.fit(sub_df)
+    return feature_col, model_to_json(m)
+
+
 class ProphetForecaster(BaseForecaster):
     """
     Univariate Prophet ensemble for multivariate telemetry forecasting.
     Trains one Facebook Prophet model per numeric feature column and packages
     them into a unified BaseForecaster interface.
+
+    Speed optimizations vs default Prophet:
+      - n_changepoints=10 (default 25) — fewer changepoints to fit
+      - uncertainty_samples=100 (default 1000) — less MC sampling
+      - Parallel fitting across features via multiprocessing
     """
     def __init__(self, interval_width: float = 0.8):
         self.interval_width = interval_width
@@ -28,25 +49,43 @@ class ProphetForecaster(BaseForecaster):
     def fit(self, train_df: pd.DataFrame, feature_cols: List[str], target_col: str = None, **kwargs) -> Dict[str, Any]:
         """
         Fits one Prophet model per feature in feature_cols.
+        Uses parallel fitting when multiple features are provided.
         """
         ts_col = "timestamp" if "timestamp" in train_df.columns else ("ds" if "ds" in train_df.columns else train_df.columns[0])
         df_clean = train_df.copy()
         df_clean[ts_col] = pd.to_datetime(df_clean[ts_col])
-        
-        # Exclude one-hot cluster_ columns if needed
-        self.feature_cols = [f for f in feature_cols if f in df_clean.columns and not f.startswith("cluster_")]
-        metrics = {}
 
+        self.feature_cols = [f for f in feature_cols if f in df_clean.columns and not f.startswith("cluster_")]
+
+        # Prepare per-feature data
+        tasks = []
         for fcol in self.feature_cols:
             sub_df = df_clean[[ts_col, fcol]].rename(columns={ts_col: "ds", fcol: "y"})
-            m = Prophet(
-                daily_seasonality=True,
-                weekly_seasonality=True,
-                yearly_seasonality=False,
-                interval_width=self.interval_width
-            )
-            m.fit(sub_df)
-            self.models[fcol] = m
+            tasks.append((sub_df, fcol, self.interval_width))
+
+        max_workers = min(len(self.feature_cols), os.cpu_count() or 1)
+
+        if max_workers > 1 and len(tasks) > 1:
+            # Parallel fitting
+            print(f"[Prophet] Fitting {len(tasks)} features in parallel ({max_workers} workers)...")
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_fit_single_feature, task): task[1] for task in tasks}
+                for future in as_completed(futures):
+                    fcol, model_json = future.result()
+                    self.models[fcol] = model_from_json(model_json)
+        else:
+            # Sequential fitting (single feature or single CPU)
+            for fcol, sub_df, iw in tasks:
+                m = Prophet(
+                    daily_seasonality=True,
+                    weekly_seasonality=True,
+                    yearly_seasonality=False,
+                    interval_width=iw,
+                    n_changepoints=10,
+                    uncertainty_samples=100,
+                )
+                m.fit(sub_df)
+                self.models[fcol] = m
 
         return {"fitted_features": len(self.models)}
 
@@ -79,7 +118,7 @@ class ProphetForecaster(BaseForecaster):
         """
         if not self.models:
             raise RuntimeError("No trained Prophet models to save.")
-        
+
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         serialized_data = {
             "feature_cols": self.feature_cols,
@@ -96,10 +135,10 @@ class ProphetForecaster(BaseForecaster):
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Prophet checkpoint not found at {filepath}")
-        
+
         with open(filepath, "r") as f:
             data = json.load(f)
-        
+
         self.feature_cols = data.get("feature_cols", [])
         self.interval_width = data.get("interval_width", 0.8)
         self.models = {fcol: model_from_json(json_str) for fcol, json_str in data["models"].items()}
