@@ -50,7 +50,7 @@ class ProphetForecaster(BaseForecaster):
 
         return {"fitted_features": len(self.models)}
 
-    def predict(self, context_df: pd.DataFrame, horizon: int = 15) -> pd.DataFrame:
+    def predict(self, context_df: pd.DataFrame, horizon: int = 60) -> pd.DataFrame:
         """
         Generates forecasts for all fitted features for the specified horizon (minutes).
         Returns a DataFrame with predicted columns and confidence bounds.
@@ -60,15 +60,15 @@ class ProphetForecaster(BaseForecaster):
 
         ts_col = "timestamp" if "timestamp" in context_df.columns else ("ds" if "ds" in context_df.columns else context_df.columns[0])
         last_timestamp = pd.to_datetime(context_df[ts_col].iloc[-1])
+        future_dates = pd.date_range(start=last_timestamp + pd.Timedelta(minutes=1), periods=horizon, freq="1min")
+        future_df = pd.DataFrame({"ds": future_dates})
 
-        predictions = {}
+        predictions = {"ds": future_dates}
         for fcol, m in self.models.items():
-            future = m.make_future_dataframe(periods=horizon, freq="1min", include_history=False)
-            # Offset future dates starting after context_df last timestamp if necessary
-            forecast = m.predict(future)
-            predictions[fcol] = forecast["yhat"].values[:horizon]
-            predictions[f"{fcol}_lower"] = forecast["yhat_lower"].values[:horizon]
-            predictions[f"{fcol}_upper"] = forecast["yhat_upper"].values[:horizon]
+            forecast = m.predict(future_df)
+            predictions[fcol] = forecast["yhat"].values
+            predictions[f"{fcol}_lower"] = forecast["yhat_lower"].values
+            predictions[f"{fcol}_upper"] = forecast["yhat_upper"].values
 
         res_df = pd.DataFrame(predictions)
         return res_df

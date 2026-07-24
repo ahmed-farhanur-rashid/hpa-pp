@@ -140,7 +140,6 @@ def main(args):
                 f"{pinball_val:.4f}",
                 f"{cov_val:.2f}%"
             )
-            progress.update(feat_task, advance=1)
 
     console.print(table)
     if all_results:
@@ -151,7 +150,8 @@ def main(args):
         console.print(f"[bold yellow]▶ Fitting full Prophet model and saving checkpoint to:[/bold yellow] [cyan]{args.out}[/cyan]...")
         from model import ProphetForecaster
         forecaster = ProphetForecaster()
-        forecaster.fit(df, feature_cols=valid_features)
+        train_sub = df.iloc[-args.max_train_history:] if args.max_train_history and len(df) > args.max_train_history else df
+        forecaster.fit(train_sub, feature_cols=valid_features)
         forecaster.save(args.out)
         console.print(f"[bold green]✔ Saved Prophet checkpoint to[/bold green] [cyan]{args.out}[/cyan]")
 
