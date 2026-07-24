@@ -50,6 +50,7 @@ htmlcov/
 *.joblib
 prophet_cache/
 model_cache/
+*.pt
 
 # Build
 *.whl

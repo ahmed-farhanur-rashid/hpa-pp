@@ -51,8 +51,9 @@ def rolling_eval(df: pd.DataFrame, feature: str, horizon: int, input_window: int
 
     for cutoff in cutoffs:
         train_start = max(0, cutoff - max_train_history) if max_train_history else 0
-        train_slice = df.iloc[train_start:cutoff][["timestamp", feature]].rename(
-            columns={"timestamp": "ds", feature: "y"}
+        ts_col = "timestamp" if "timestamp" in df.columns else "ds"
+        train_slice = df.iloc[train_start:cutoff][[ts_col, feature]].rename(
+            columns={ts_col: "ds", feature: "y"}
         )
         # Prophet needs enough history to fit seasonality; skip degenerate windows
         if len(train_slice) < input_window:
@@ -121,8 +122,8 @@ def main(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--csv", type=str, required=True)
-    p.add_argument("--features", nargs="+", required=True)
+    p.add_argument("--csv", type=str, default="data/synthetic_hpa_traffic_all_clusters_365d.csv")
+    p.add_argument("--features", nargs="+", default=["requests_per_second", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct", "pod_count"])
     p.add_argument("--horizon", type=int, default=60,  # 1h @ 1min
                     help="Forecast horizon in timesteps. Default = 1h at 1-min resolution.")
     p.add_argument("--input_window", type=int, default=1440,  # 24h @ 1min

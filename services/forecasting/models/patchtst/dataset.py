@@ -32,7 +32,8 @@ class TelemetryDataset(Dataset):
         self.mean, self.std = mean, std
         self.values = (values - mean) / std
 
-        dt = pd.to_datetime(df["timestamp"]) if "timestamp" in df.columns else pd.to_datetime(df.iloc[:, 0])
+        ts_col = "timestamp" if "timestamp" in df.columns else ("ds" if "ds" in df.columns else df.columns[0])
+        dt = pd.to_datetime(df[ts_col])
         # step-of-day, generic over resolution: minutes-since-midnight / minutes-per-step.
         # minutes_per_step derived from steps_per_day (1440 => 1 min/step, 288 => 5 min/step).
         minutes_per_step = 1440 // steps_per_day

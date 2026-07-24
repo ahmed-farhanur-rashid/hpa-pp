@@ -97,8 +97,8 @@ def train(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--csv", type=str, required=True)
-    p.add_argument("--features", nargs="+", required=True)
+    p.add_argument("--csv", type=str, default="data/synthetic_hpa_traffic_all_clusters_365d.csv")
+    p.add_argument("--features", nargs="+", default=["requests_per_second", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct", "pod_count"])
     p.add_argument("--steps_per_day", type=int, default=1440)
     p.add_argument("--input_window", type=int, default=1440)
     p.add_argument("--horizon", type=int, default=60)
