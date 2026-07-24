@@ -1,262 +1,252 @@
-"""
-Controller API routes module.
+"""Controller API routes — scaling, GPU, and status endpoints."""
 
-Defines all REST API endpoints for scaling evaluation, execution,
-GPU scheduling, and controller status.
-"""
+from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from httpx import AsyncClient
 
 from shared.api import ApiResponse
 from shared.decisions import ScalingConfig, ScalingDecision
 from shared.gpu import GpuAssignment, GpuRebalanceEvent
 
+from app import dependencies as deps
+from app.config import load_scaling_config, save_scaling_config
+from app.executor import ReactiveFallback
+from app.scaler import PredictiveController
+
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Shared HTTP client for simulation calls (set during lifespan)
+_sim_http: AsyncClient | None = None
+_sim_base_url: str = "http://simulation:8001/api/v1"
 
-@router.post("/scale/evaluate", response_model=ApiResponse)
+
+# ── Scale evaluation ───────────────────────────────────────────
+
+@router.post("/scale/evaluate", response_model=ApiResponse[dict[str, Any]])
 async def evaluate_scaling(
     deployment_id: str,
     config: Optional[ScalingConfig] = None,
-) -> ApiResponse:
-    """Evaluate scaling decision for a deployment.
-
-    Args:
-        deployment_id: Unique identifier for the deployment.
-        config: Optional custom scaling configuration override.
-
-    Returns:
-        ApiResponse: Wrapped scaling decision with metadata.
-
-    Raises:
-        HTTPException 404: If deployment not found.
-        HTTPException 422: If deployment_id is invalid.
-
-    TODO:
-        - Validate deployment_id format.
-        - Log evaluation request.
-        - Emit metrics for evaluation latency.
-    """
-    ...
+    controller: PredictiveController = Depends(deps.get_controller),
+) -> ApiResponse[dict[str, Any]]:
+    """Evaluate scaling decision for a deployment (9-step formula)."""
+    try:
+        decision = await controller.evaluate(deployment_id, config)
+        return ApiResponse(data=decision.model_dump(mode="json"))
+    except Exception as e:
+        logger.error("Evaluation failed for %s: %s", deployment_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/scale/execute", response_model=ApiResponse)
+# ── Scale execution ────────────────────────────────────────────
+
+@router.post("/scale/execute", response_model=ApiResponse[dict[str, Any]])
 async def execute_scaling(
     decision_id: str,
-) -> ApiResponse:
-    """Execute a previously evaluated scaling decision.
+    executor=Depends(deps.get_executor),
+    db=Depends(deps.get_db),
+) -> ApiResponse[dict[str, Any]]:
+    """Execute a previously evaluated scaling decision."""
+    rows = db.query_scaling_decisions(deployment_id="", limit=200)
+    decision: ScalingDecision | None = None
+    for row in rows:
+        d = ScalingDecision.model_validate(row)
+        if d.decision_id == decision_id:
+            decision = d
+            break
 
-    Args:
-        decision_id: Unique identifier of the scaling decision.
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
 
-    Returns:
-        ApiResponse: Execution result with status and details.
+    success = await executor.execute(decision)
+    if not success:
+        raise HTTPException(status_code=500, detail="Execution failed")
 
-    Raises:
-        HTTPException 404: If decision not found.
-        HTTPException 409: If decision already executed.
-        HTTPException 500: If execution fails.
-
-    TODO:
-        - Validate decision exists and is executable.
-        - Check executor mode (simulation vs real).
-        - Record execution outcome.
-    """
-    ...
+    return ApiResponse(data={
+        "decision_id": decision_id,
+        "status": "executed",
+        "target_replicas": decision.target_replicas,
+    })
 
 
-@router.get("/scale/decisions", response_model=ApiResponse)
+# ── Decision history ───────────────────────────────────────────
+
+@router.get("/scale/decisions", response_model=ApiResponse[list[dict[str, Any]]])
 async def get_scaling_decisions(
     deployment_id: str,
     limit: int = Query(default=50, ge=1, le=200),
-) -> ApiResponse:
-    """Get scaling decision history for a deployment.
-
-    Args:
-        deployment_id: Unique identifier for the deployment.
-        limit: Maximum number of decisions to return.
-
-    Returns:
-        ApiResponse: List of scaling decisions ordered by timestamp desc.
-
-    Raises:
-        HTTPException 404: If deployment not found.
-
-    TODO:
-        - Support pagination with offset/cursor.
-        - Add date range filtering.
-        - Cache frequently accessed histories.
-    """
-    ...
+    controller: PredictiveController = Depends(deps.get_controller),
+) -> ApiResponse[list[dict[str, Any]]]:
+    """Get scaling decision history for a deployment."""
+    decisions = controller.get_decision_history(deployment_id, limit)
+    return ApiResponse(data=[d.model_dump(mode="json") for d in decisions])
 
 
-@router.get("/scale/latest", response_model=ApiResponse)
+@router.get("/scale/latest", response_model=ApiResponse[dict[str, Any] | None])
 async def get_latest_scaling_decision(
     deployment_id: str,
-) -> ApiResponse:
-    """Get the most recent scaling decision for a deployment.
-
-    Args:
-        deployment_id: Unique identifier for the deployment.
-
-    Returns:
-        ApiResponse: Latest scaling decision or empty if none.
-
-    Raises:
-        HTTPException 404: If deployment not found.
-
-    TODO:
-        - Consider cache for hot deployments.
-        - Include related metrics snapshot.
-    """
-    ...
+    db=Depends(deps.get_db),
+) -> ApiResponse[dict[str, Any] | None]:
+    """Get the most recent scaling decision for a deployment."""
+    row = db.query_latest_decision(deployment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No decisions found")
+    return ApiResponse(data=dict(row))
 
 
-@router.post("/scale/config", response_model=ApiResponse)
+# ── Scaling config ─────────────────────────────────────────────
+
+@router.post("/scale/config", response_model=ApiResponse[dict[str, Any]])
 async def update_scaling_config(
     deployment_id: str,
     config: ScalingConfig,
-) -> ApiResponse:
-    """Update scaling configuration for a deployment.
-
-    Args:
-        deployment_id: Unique identifier for the deployment.
-        config: New scaling configuration.
-
-    Returns:
-        ApiResponse: Updated configuration confirmation.
-
-    Raises:
-        HTTPException 404: If deployment not found.
-        HTTPException 422: If config validation fails.
-
-    TODO:
-        - Validate config against allowed ranges.
-        - Emit config change event.
-        - Log config changes for audit trail.
-    """
-    ...
+    db=Depends(deps.get_db),
+) -> ApiResponse[dict[str, Any]]:
+    """Update scaling configuration for a deployment."""
+    try:
+        save_scaling_config(config, db)
+        return ApiResponse(data={"deployment_id": deployment_id, "saved": True})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
-@router.get("/scale/config", response_model=ApiResponse)
-async def get_scaling_config(
+@router.get("/scale/config", response_model=ApiResponse[dict[str, Any] | None])
+async def get_scaling_config_endpoint(
     deployment_id: str,
-) -> ApiResponse:
-    """Get current scaling configuration for a deployment.
-
-    Args:
-        deployment_id: Unique identifier for the deployment.
-
-    Returns:
-        ApiResponse: Current scaling configuration.
-
-    Raises:
-        HTTPException 404: If deployment or config not found.
-
-    TODO:
-        - Return default config if no custom config exists.
-    """
-    ...
+    db=Depends(deps.get_db),
+) -> ApiResponse[dict[str, Any] | None]:
+    """Get current scaling configuration for a deployment."""
+    config = load_scaling_config(deployment_id, db)
+    return ApiResponse(data=config.model_dump(mode="json"))
 
 
-@router.post("/gpu/assign", response_model=ApiResponse)
+# ── GPU assignment ─────────────────────────────────────────────
+
+@router.post("/gpu/assign", response_model=ApiResponse[list[dict[str, Any]]])
 async def assign_gpus(
-    pods: list[str],
-    gpu_ids: list[str],
+    pod_ids: list[str],
+    gpu_specs: list[dict[str, Any]],
     strategy: str = Query(default="bin_pack"),
-) -> ApiResponse:
-    """Assign GPUs to pods using specified scheduling strategy.
+    scheduler=Depends(deps.get_gpu_scheduler),
+) -> ApiResponse[list[dict[str, Any]]]:
+    """Compute GPU-to-pod assignments using the specified strategy.
 
-    Args:
-        pods: List of pod identifiers to assign GPUs to.
-        gpu_ids: List of GPU identifiers available for assignment.
-        strategy: Scheduling strategy (bin_pack, spread, etc.).
-
-    Returns:
-        ApiResponse: List of GPU assignments.
-
-    Raises:
-        HTTPException 409: If insufficient GPUs available.
-        HTTPException 422: If strategy unknown.
-
-    TODO:
-        - Validate pod and GPU IDs exist.
-        - Check for existing assignments (conflict detection).
-        - Emit GPU allocation metrics.
+    Provide ``gpu_specs`` as list of dicts from the simulation's
+    cluster nodes endpoint. Each dict needs:
+      ``gpu_id``, ``node_id``, ``total_memory_mb``, ``allocated_memory_mb``.
     """
-    ...
+    assignments = await scheduler.assign_gpus(pod_ids, gpu_specs, strategy=strategy)
+    return ApiResponse(data=[a.model_dump(mode="json") for a in assignments])
 
 
-@router.post("/gpu/rebalance", response_model=ApiResponse)
+@router.post("/gpu/rebalance", response_model=ApiResponse[dict[str, Any]])
 async def rebalance_gpus(
     trigger_reason: str = Query(default="manual"),
-) -> ApiResponse:
-    """Trigger GPU rebalancing across pods.
+    scheduler=Depends(deps.get_gpu_scheduler),
+    db=Depends(deps.get_db),
+) -> ApiResponse[dict[str, Any]]:
+    """Rebalance GPU assignments across pods.
 
-    Args:
-        trigger_reason: Why rebalancing was triggered.
-
-    Returns:
-        ApiResponse: Rebalance event with before/after state.
-
-    Raises:
-        HTTPException 500: If rebalancing fails.
-
-    TODO:
-        - Implement contention detection.
-        - Support dry-run mode for rebalance preview.
-        - Record rebalance events for audit.
+    Fetches current GPU state from the simulation and existing
+    assignments from the database, then invokes the rebalancer.
     """
-    ...
+    global _sim_http, _sim_base_url
+    http = _sim_http or AsyncClient(timeout=5.0)
+
+    try:
+        # Fetch current cluster state from simulation
+        nodes_resp = await http.get(f"{_sim_base_url}/cluster/nodes")
+        nodes_data = nodes_resp.json().get("data", [])
+
+        gpu_specs: list[dict[str, Any]] = []
+        for node in nodes_data:
+            for gpu_id in node.get("gpu_ids", []):
+                gpu_specs.append({
+                    "gpu_id": gpu_id,
+                    "node_id": node["node_id"],
+                    "total_memory_mb": node.get("total_gpu_memory_mb", 8192),
+                    "allocated_memory_mb": node.get("allocated_gpu_memory_mb", 0),
+                })
+
+        # Fetch current assignments from DB
+        rows = db.query_gpu_assignments()
+        current_assignments = [GpuAssignment.model_validate(r) for r in rows]
+
+        event = await scheduler.rebalance(
+            current_assignments, gpu_specs, trigger_reason=trigger_reason,
+        )
+        return ApiResponse(data=event.model_dump(mode="json"))
+    except Exception as e:
+        logger.error("GPU rebalance failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/gpu/assignments", response_model=ApiResponse)
-async def get_gpu_assignments(
+@router.get("/gpu/assignments", response_model=ApiResponse[list[dict[str, Any]]])
+async def get_gpu_assignments_route(
     deployment_id: Optional[str] = Query(default=None),
-) -> ApiResponse:
-    """Get current GPU assignments.
-
-    Args:
-        deployment_id: Optional filter by deployment.
-
-    Returns:
-        ApiResponse: List of GPU assignments.
-
-    TODO:
-        - Add pod-level filtering.
-        - Support pagination for large clusters.
-    """
-    ...
+    db=Depends(deps.get_db),
+) -> ApiResponse[list[dict[str, Any]]]:
+    """Get current GPU assignments from the database."""
+    rows = db.query_gpu_assignments(limit=200)
+    if deployment_id:
+        rows = [r for r in rows if r.get("deployment_id") == deployment_id]
+    return ApiResponse(data=[dict(r) for r in rows])
 
 
-@router.get("/gpu/status", response_model=ApiResponse)
-async def get_gpu_status() -> ApiResponse:
-    """Get GPU cluster status and utilization summary.
+@router.get("/gpu/status", response_model=ApiResponse[dict[str, Any]])
+async def get_gpu_status() -> ApiResponse[dict[str, Any]]:
+    """Get GPU utilisation summary from the simulation."""
+    global _sim_http, _sim_base_url
+    http = _sim_http or AsyncClient(timeout=5.0)
 
-    Returns:
-        ApiResponse: GPU utilization, availability, contention info.
+    try:
+        resp = await http.get(f"{_sim_base_url}/cluster/nodes")
+        nodes = resp.json().get("data", [])
 
-    TODO:
-        - Include per-GPU utilization.
-        - Add contention alerts.
-        - Support time-series snapshot mode.
-    """
-    ...
+        total_gpus = 0
+        allocated_gpus = 0
+        for node in nodes:
+            gpu_ids = node.get("gpu_ids", [])
+            total_gpus += len(gpu_ids)
+            alloc = node.get("allocated_gpu_memory_mb", 0)
+            total = node.get("total_gpu_memory_mb", 8192)
+            if alloc > 0:
+                allocated_gpus += len(gpu_ids)
+
+        return ApiResponse(data={
+            "total_gpus": total_gpus,
+            "allocated_gpus": allocated_gpus,
+            "nodes_with_gpu": sum(1 for n in nodes if n.get("gpu_ids")),
+        })
+    except Exception as e:
+        logger.warning("Simulation GPU status unavailable: %s", e)
+        return ApiResponse(data={
+            "total_gpus": 0, "allocated_gpus": 0, "nodes_with_gpu": 0,
+            "error": str(e),
+        })
 
 
-@router.get("/status", response_model=ApiResponse)
-async def get_controller_status() -> ApiResponse:
-    """Get controller service health and operational status.
+# ── Service health ─────────────────────────────────────────────
 
-    Returns:
-        ApiResponse: Service status, uptime, component health.
+@router.get("/status", response_model=ApiResponse[dict[str, Any]])
+async def get_controller_status(
+    db=Depends(deps.get_db),
+) -> ApiResponse[dict[str, Any]]:
+    """Controller service health and operational status."""
+    db_ok = False
+    try:
+        db.connection  # lazy connect check
+        db_ok = True
+    except Exception:
+        pass
 
-    TODO:
-        - Check database connectivity.
-        - Check Kubernetes API availability.
-        - Report queue depths.
-        - Include version info.
-    """
-    ...
+    return ApiResponse(data={
+        "service": "controller",
+        "database": "connected" if db_ok else "disconnected",
+        "controller_ready": deps.controller_instance is not None,
+        "executor_ready": deps.executor_instance is not None,
+    })
