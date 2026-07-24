@@ -28,7 +28,7 @@ python services/forecasting/models/custom_model/train_custom.py \
 python services/forecasting/models/patchtst/train_patchtst.py \
   --epochs 10 \
   --batch_size 128 \
-  --out models/patchtst_checkpoint.pt
+  --out services/forecasting/checkpoints/patchtst_checkpoint.pt
 ```
 
 ### C. Train Baseline 2: Prophet (Additive Baseline)
@@ -60,3 +60,7 @@ python services/forecasting/models/evaluate.py \
   --checkpoint services/forecasting/checkpoints/prophet_checkpoint.json \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 ```
+
+## 4. Model Inference Guide
+
+For complete technical documentation on how to perform inference using PyTorch checkpoints or Prophet JSON checkpoints in Python, see [INFERENCE_GUIDE.md](../../docs/INFERENCE_GUIDE.md).
