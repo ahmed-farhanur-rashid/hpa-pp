@@ -33,6 +33,7 @@ hf_upload/
 .env
 temp/
 data/
+psa-net/
 
 # Docker
 .dockerignore
