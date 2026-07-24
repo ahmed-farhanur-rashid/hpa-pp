@@ -565,3 +565,62 @@ class ClusterStateManager:
 
         deployment.target_replicas = target_replicas
         return new_pods
+
+    def assign_gpu(
+        self,
+        pod_id: str,
+        gpu_id: str,
+        gpu_memory_mb: int | None = None,
+    ) -> None:
+        """Assign a specific GPU device to a pod.
+
+        Used by the controller's GPU scheduler to execute
+        bin-pack/spread placement decisions.
+
+        Args:
+            pod_id: Pod to receive the GPU assignment.
+            gpu_id: GPU device identifier (format: ``{node_id}-gpu-{N}``).
+            gpu_memory_mb: GPU memory to allocate (defaults to pod's request).
+
+        Raises:
+            KeyError: If pod or GPU is not found.
+            ValueError: If GPU is already assigned to another pod.
+        """
+        # Find the pod across all deployments
+        pod: PodState | None = None
+        for dep in self.deployments.values():
+            for p in dep.pods:
+                if p.pod_id == pod_id:
+                    pod = p
+                    break
+            if pod:
+                break
+
+        if pod is None:
+            raise KeyError(f"Pod '{pod_id}' not found")
+
+        # Find the GPU in any node's allocation dict
+        for node_id, gpu_alloc in self._node_gpu_alloc.items():
+            if gpu_id not in gpu_alloc:
+                continue
+
+            existing = gpu_alloc[gpu_id]
+            if existing is not None and existing != pod_id:
+                raise ValueError(
+                    f"GPU '{gpu_id}' already assigned to pod '{existing}'"
+                )
+
+            # Assign device
+            gpu_alloc[gpu_id] = pod_id
+            pod.gpu_id = gpu_id
+            pod.node_id = node_id
+            pod.status = PodStatus.RUNNING
+
+            # Update node GPU memory allocation
+            node = self.nodes[node_id]
+            alloc_mb = gpu_memory_mb or pod.gpu_memory_request_mb or 0
+            node.allocated_gpu_memory_mb += alloc_mb
+
+            return
+
+        raise KeyError(f"GPU '{gpu_id}' not found on any node")

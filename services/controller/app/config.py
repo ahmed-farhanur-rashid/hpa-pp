@@ -1,16 +1,13 @@
-"""
-Scaling configuration module.
+"""Scaling configuration — load, save, validate."""
 
-Provides default configuration, loading, saving, and validation
-for scaling parameters.
-"""
+from __future__ import annotations
 
 from typing import Any
 
 from shared.db.manager import DatabaseManager
 from shared.decisions import ScalingConfig
 
-DEFAULT_SCALING_CONFIG: dict = {
+DEFAULT_SCALING_CONFIG: dict[str, Any] = {
     "min_pods": 1,
     "max_pods": 10,
     "target_cpu_pct": 70.0,
@@ -22,79 +19,73 @@ DEFAULT_SCALING_CONFIG: dict = {
     "confidence_threshold": 0.6,
     "gpu_assignment_strategy": "bin_pack",
 }
-"""Default scaling configuration values."""
 
 
 def load_scaling_config(
     deployment_id: str,
     db: DatabaseManager,
 ) -> ScalingConfig:
-    """Load scaling configuration for a deployment.
-
-    Retrieves deployment-specific config or returns defaults.
+    """Load scaling config for a deployment, merging with defaults.
 
     Args:
-        deployment_id: Unique identifier for the deployment.
-        db: Database manager for persistence.
+        deployment_id: Deployment to load config for.
+        db: Database manager.
 
     Returns:
-        ScalingConfig: Scaling configuration for the deployment.
-
-    Raises:
-        ValueError: If deployment_id is invalid.
-        RuntimeError: If database query fails.
-
-    TODO:
-        - Query database for deployment config.
-        - Merge with DEFAULT_SCALING_CONFIG for missing values.
-        - Cache config for repeated access.
-        - Handle database connection failures gracefully.
+        ScalingConfig populated with per-deployment or default values.
     """
-    ...
+    row = db.get_scaling_config(deployment_id=deployment_id)
+    if row:
+        return ScalingConfig.model_validate(row)
+    return ScalingConfig(
+        deployment_id=deployment_id,
+        min_replicas=DEFAULT_SCALING_CONFIG["min_pods"],
+        max_replicas=DEFAULT_SCALING_CONFIG["max_pods"],
+        target_cpu_utilization_pct=DEFAULT_SCALING_CONFIG["target_cpu_pct"],
+        scale_up_cooldown_seconds=DEFAULT_SCALING_CONFIG["scale_up_cooldown_seconds"],
+        scale_down_cooldown_seconds=DEFAULT_SCALING_CONFIG["scale_down_cooldown_seconds"],
+        stabilization_window_seconds=DEFAULT_SCALING_CONFIG["stabilization_window_seconds"],
+        risk_asymmetry_factor=3.0,
+        baseline_per_pod=100.0,
+    )
 
 
 def save_scaling_config(
     config: ScalingConfig,
     db: DatabaseManager,
 ) -> None:
-    """Save scaling configuration to database.
+    """Persist a scaling config to the database.
 
     Args:
-        config: Scaling configuration to save.
-        db: Database manager for persistence.
+        config: Scaling config to save.
+        db: Database manager.
 
     Raises:
         ValueError: If config validation fails.
-        RuntimeError: If database write fails.
-
-    TODO:
-        - Validate config before saving.
-        - Upsert configuration (create or update).
-        - Record config change event.
-        - Emit config change metrics.
     """
-    ...
+    errors = validate_scaling_config(config)
+    if errors:
+        raise ValueError("; ".join(errors))
+    db.upsert_scaling_config(config)
 
 
 def validate_scaling_config(config: ScalingConfig) -> list[str]:
-    """Validate scaling configuration parameters.
-
-    Checks that all config values are within acceptable ranges.
-
-    Args:
-        config: Scaling configuration to validate.
-
-    Returns:
-        list[str]: List of validation error messages (empty if valid).
-
-    Raises:
-        None: Validation errors returned as list, not raised.
-
-    TODO:
-        - Validate min_pods <= max_pods.
-        - Validate CPU percentage in [0, 100] range.
-        - Validate cooldown durations are positive.
-        - Validate risk and confidence thresholds in [0, 1].
-        - Validate GPU strategy is known.
-    """
-    ...
+    """Validate scaling config ranges. Returns error messages (empty = valid)."""
+    errors: list[str] = []
+    if config.min_replicas > config.max_replicas:
+        errors.append("min_replicas exceeds max_replicas")
+    if config.min_replicas < 0:
+        errors.append("min_replicas must be >= 0")
+    if not 0 <= config.target_cpu_utilization_pct <= 100:
+        errors.append("target_cpu_utilization_pct must be 0-100")
+    if config.scale_up_cooldown_seconds < 0:
+        errors.append("scale_up_cooldown_seconds must be >= 0")
+    if config.scale_down_cooldown_seconds < 0:
+        errors.append("scale_down_cooldown_seconds must be >= 0")
+    if config.stabilization_window_seconds < 0:
+        errors.append("stabilization_window_seconds must be >= 0")
+    if not 0 <= config.risk_asymmetry_factor <= 20:
+        errors.append("risk_asymmetry_factor must be 0-20")
+    if config.baseline_per_pod <= 0:
+        errors.append("baseline_per_pod must be > 0")
+    return errors
