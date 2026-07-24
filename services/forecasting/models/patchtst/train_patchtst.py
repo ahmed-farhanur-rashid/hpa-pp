@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import os
 
 import pandas as pd
 import torch
@@ -60,39 +61,71 @@ def train(args):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = PatchTST(cfg).to(device)
-    print(f"PatchTST params: {model.param_count():,}  |  device: {device}")
+    from rich.console import Console
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
+    from rich.table import Table
+
+    console = Console()
+    console.print(f"[bold green]▶ [PatchTST][/bold green] Initializing model on [cyan]{device}[/cyan] (Parameters: [bold]{model.param_count():,}[/bold])...")
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     quantiles = [0.1, 0.5, 0.9]
 
-    for epoch in range(args.epochs):
-        model.train()
-        train_loss = 0.0
-        for hist, tod, dow, target in train_loader:  # tod/dow unused by PatchTST (no seasonal embed)
-            hist, target = hist.to(device), target.to(device)
-            opt.zero_grad()
-            pred = model(hist)
-            loss = quantile_loss(pred, target, quantiles)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step()
-            train_loss += loss.item()
-        train_loss /= len(train_loader)
+    table = Table(title="[bold yellow]PatchTST Training Metrics[/bold yellow]", header_style="bold magenta")
+    table.add_column("Epoch", justify="center", style="cyan")
+    table.add_column("Train Loss", justify="right", style="green")
+    table.add_column("Val Loss", justify="right", style="blue")
+    table.add_column("Status", justify="center", style="dim")
 
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for hist, tod, dow, target in val_loader:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeRemainingColumn(),
+        console=console
+    ) as progress:
+        epoch_task = progress.add_task("[yellow]Training Epochs...", total=args.epochs)
+        for epoch in range(args.epochs):
+            model.train()
+            train_loss = 0.0
+            batch_task = progress.add_task(f"[cyan]Epoch {epoch+1}/{args.epochs}", total=len(train_loader))
+            for hist, tod, dow, target in train_loader:
                 hist, target = hist.to(device), target.to(device)
+                opt.zero_grad()
                 pred = model(hist)
-                val_loss += quantile_loss(pred, target, quantiles).item()
-        val_loss /= len(val_loader)
+                loss = quantile_loss(pred, target, quantiles)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step()
+                train_loss += loss.item()
+                progress.update(batch_task, advance=1)
 
-        print(f"epoch {epoch+1:3d}/{args.epochs}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}")
+            train_loss /= len(train_loader)
+            progress.remove_task(batch_task)
 
-    torch.save({"model_state": model.state_dict(), "config": cfg, "mean": train_ds.mean, "std": train_ds.std},
-               args.out)
-    print(f"Saved to {args.out}")
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for hist, tod, dow, target in val_loader:
+                    hist, target = hist.to(device), target.to(device)
+                    pred = model(hist)
+                    val_loss += quantile_loss(pred, target, quantiles).item()
+            val_loss /= len(val_loader)
+
+            table.add_row(f"{epoch+1}/{args.epochs}", f"{train_loss:.5f}", f"{val_loss:.5f}", "✔")
+            progress.update(epoch_task, advance=1)
+
+    console.print(table)
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    torch.save({
+        "model_state": model.state_dict(),
+        "config": cfg,
+        "mean": train_ds.mean,
+        "std": train_ds.std,
+        "feature_cols": feature_cols
+    }, args.out)
+    console.print(f"[bold green]✔ Saved PatchTST checkpoint to[/bold green] [cyan]{args.out}[/cyan]")
 
 
 if __name__ == "__main__":
@@ -103,10 +136,10 @@ if __name__ == "__main__":
         "requests_per_second", "concurrent_users", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct", "pod_count"
     ])
     p.add_argument("--steps_per_day", type=int, default=1440)
-    p.add_argument("--input_window", type=int, default=1440)
-    p.add_argument("--horizon", type=int, default=60)
-    p.add_argument("--patch_len", type=int, default=60)
-    p.add_argument("--patch_stride", type=int, default=30)
+    p.add_argument("--input_window", type=int, default=120)
+    p.add_argument("--horizon", type=int, default=15)
+    p.add_argument("--patch_len", type=int, default=15)
+    p.add_argument("--patch_stride", type=int, default=15)
     p.add_argument("--d_model", type=int, default=128)
     p.add_argument("--n_heads", type=int, default=4)
     p.add_argument("--n_layers", type=int, default=3)

@@ -5,7 +5,7 @@
 Run the canonical dataset preparation script to copy raw data from `hf_upload/data/` to `data/`, apply One-Hot Encoding (`cluster_*`), preserve `concurrent_users`, and format the schema:
 
 ```bash
-.venv/bin/python scripts/prep_data.py
+python scripts/prep_data.py
 ```
 
 ## 2. Model Training (All Architectures)
@@ -16,7 +16,7 @@ All model checkpoints are saved directly to `services/forecasting/checkpoints/`.
 
 ```bash
 # Standard 10-epoch training on 2.6M-row multi-cluster dataset
-.venv/bin/python services/forecasting/models/custom_model/train_custom.py \
+python services/forecasting/models/custom_model/train_custom.py \
   --epochs 10 \
   --batch_size 128 \
   --out services/forecasting/checkpoints/psanet_checkpoint.pt
@@ -25,7 +25,7 @@ All model checkpoints are saved directly to `services/forecasting/checkpoints/`.
 ### B. Train Baseline 1: PatchTST (Channel-Independent Transformer)
 
 ```bash
-.venv/bin/python services/forecasting/models/patchtst/train_patchtst.py \
+python services/forecasting/models/patchtst/train_patchtst.py \
   --epochs 10 \
   --batch_size 128 \
   --out services/forecasting/checkpoints/patchtst_checkpoint.pt
@@ -34,9 +34,10 @@ All model checkpoints are saved directly to `services/forecasting/checkpoints/`.
 ### C. Train Baseline 2: Prophet (Additive Baseline)
 
 ```bash
-.venv/bin/python services/forecasting/models/prophet/train_prophet.py \
+python services/forecasting/models/prophet/train_prophet.py \
   --horizon 15 \
-  --n_eval_windows 20
+  --n_eval_windows 20 \
+  --out services/forecasting/checkpoints/prophet_checkpoint.json
 ```
 
 ## 3. Model Evaluation on Test Set
@@ -45,17 +46,17 @@ Evaluate any trained checkpoint or baseline model on the 30-day out-of-distribut
 
 ```bash
 # Evaluate Custom Model (PSA-Net) Checkpoint
-.venv/bin/python services/forecasting/models/evaluate.py \
+python services/forecasting/models/evaluate.py \
   --checkpoint services/forecasting/checkpoints/psanet_checkpoint.pt \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 
 # Evaluate PatchTST Baseline Checkpoint
-.venv/bin/python services/forecasting/models/evaluate.py \
+python services/forecasting/models/evaluate.py \
   --checkpoint services/forecasting/checkpoints/patchtst_checkpoint.pt \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 
-# Evaluate Prophet Baseline
-.venv/bin/python services/forecasting/models/evaluate.py \
-  --model prophet \
+# Evaluate Prophet Baseline Checkpoint
+python services/forecasting/models/evaluate.py \
+  --checkpoint services/forecasting/checkpoints/prophet_checkpoint.json \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 ```

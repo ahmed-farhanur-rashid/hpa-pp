@@ -165,7 +165,7 @@ class PSANetForecaster(BaseForecaster):
             print(f"[PSA-Net] Saved checkpoint to {filepath}")
 
     def load(self, filepath: str) -> None:
-        checkpoint = torch.load(filepath, map_location=self.device)
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
         cfg = checkpoint["config"]
         self.model = PSANet(cfg).to(self.device)
         self.model.load_state_dict(checkpoint["model_state"])

@@ -24,11 +24,17 @@ warnings.filterwarnings("ignore")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 PSANET_SRC = os.path.join(PROJECT_ROOT, "psa-net", "src")
 CUSTOM_MODEL_DIR = os.path.join(PROJECT_ROOT, "services", "forecasting", "models", "custom_model")
+PATCHTST_DIR = os.path.join(PROJECT_ROOT, "services", "forecasting", "models", "patchtst")
+PROPHET_DIR = os.path.join(PROJECT_ROOT, "services", "forecasting", "models", "prophet")
 
 if PSANET_SRC not in sys.path:
     sys.path.insert(0, PSANET_SRC)
 if CUSTOM_MODEL_DIR not in sys.path:
     sys.path.insert(0, CUSTOM_MODEL_DIR)
+if PATCHTST_DIR not in sys.path:
+    sys.path.insert(0, PATCHTST_DIR)
+if PROPHET_DIR not in sys.path:
+    sys.path.insert(0, PROPHET_DIR)
 
 from rich.console import Console
 from rich.table import Table
@@ -62,18 +68,47 @@ def evaluate_pytorch_model(checkpoint_path: str, test_csv: str):
         raise FileNotFoundError(f"Test CSV not found at {test_csv}")
         
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     cfg = checkpoint["config"]
-    feature_cols = checkpoint["feature_cols"]
+    is_patchtst = (type(cfg).__name__ == "PatchTSTConfig")
+
+    if "feature_cols" in checkpoint:
+        feature_cols = checkpoint["feature_cols"]
+    else:
+        if cfg.n_features == 11:
+            feature_cols = [
+                "cluster_ecommerce", "cluster_exam_system", "cluster_genai_inference", "cluster_streaming", "cluster_university_portal",
+                "requests_per_second", "concurrent_users", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct", "pod_count"
+            ]
+        elif cfg.n_features == 5:
+            feature_cols = ["requests_per_second", "concurrent_users", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct"]
+        else:
+            df_sample = pd.read_csv(test_csv, nrows=5)
+            num_cols = [c for c in df_sample.columns if c not in ["unique_id", "ds"]]
+            feature_cols = num_cols[:cfg.n_features]
+
     mean, std = checkpoint["mean"], checkpoint["std"]
+    df_test = pd.read_csv(test_csv)
     
-    model = PSANet(cfg).to(device)
+    if is_patchtst:
+        from patchtst import PatchTST
+        import dataset as patchtst_ds
+        model = PatchTST(cfg).to(device)
+        test_ds = patchtst_ds.TelemetryDataset(
+            df_test, feature_cols,
+            input_window=cfg.input_window,
+            forecast_horizon=cfg.forecast_horizon,
+            patch_stride=cfg.patch_stride,
+            mean=mean, std=std
+        )
+    else:
+        model = PSANet(cfg).to(device)
+        test_ds = TelemetryDataset(df_test, feature_cols, cfg, mean=mean, std=std)
+
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
     
-    df_test = pd.read_csv(test_csv)
-    test_ds = TelemetryDataset(df_test, feature_cols, cfg, mean=mean, std=std)
     test_loader = torch.utils.data.DataLoader(test_ds, batch_size=128, shuffle=False)
     
     all_actuals = []
@@ -84,11 +119,14 @@ def evaluate_pytorch_model(checkpoint_path: str, test_csv: str):
     with torch.no_grad():
         for hist, tod, dow, target in test_loader:
             hist, tod, dow, target = hist.to(device), tod.to(device), dow.to(device), target.to(device)
-            preds = model(hist, tod, dow) # [B, horizon, F, 3]
+            if is_patchtst:
+                preds = model(hist) # [B, horizon, F, 3]
+            else:
+                preds = model(hist, tod, dow) # [B, horizon, F, 3]
             
             # Unscale to original units
             target_unscaled = target.cpu().numpy() * std + mean
-            pred_unscaled = preds.cpu().numpy() * std[:, None] + mean[:, None]
+            pred_unscaled = preds.cpu().numpy() * std[None, None, :, None] + mean[None, None, :, None]
             
             all_actuals.append(target_unscaled)
             all_preds_lo.append(pred_unscaled[..., 0]) # q=0.1
@@ -108,6 +146,8 @@ def evaluate_pytorch_model(checkpoint_path: str, test_csv: str):
     table.add_column("80% Coverage (%)", justify="right", style="blue")
     
     for idx, fcol in enumerate(feature_cols):
+        if fcol.startswith("cluster_"):
+            continue
         f_act = actuals[..., idx]
         f_med = preds_med[..., idx]
         f_lo = preds_lo[..., idx]
@@ -124,17 +164,24 @@ def evaluate_pytorch_model(checkpoint_path: str, test_csv: str):
         
     console.print(table)
 
-def evaluate_prophet(test_csv: str, horizon: int = 15, features=None):
+def evaluate_prophet(test_csv: str, checkpoint_path: str = None, horizon: int = 15):
     from prophet import Prophet
     console = Console()
     console.print(f"[bold green]▶ Evaluating Prophet Baseline on Test Set:[/bold green] [cyan]{test_csv}[/cyan]")
     
-    if features is None:
-        features = ["requests_per_second", "concurrent_users", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct"]
-        
     df = pd.read_csv(test_csv)
     ts_col = "timestamp" if "timestamp" in df.columns else "ds"
     
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        console.print(f"[bold yellow]▶ Loading Prophet checkpoint from:[/bold yellow] [cyan]{checkpoint_path}[/cyan]")
+        from model import ProphetForecaster
+        forecaster = ProphetForecaster()
+        forecaster.load(checkpoint_path)
+        features = forecaster.feature_cols
+    else:
+        features = ["requests_per_second", "concurrent_users", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct"]
+        forecaster = None
+
     table = Table(title=f"[bold yellow]Prophet Baseline Evaluation (Test Set: {os.path.basename(test_csv)})[/bold yellow]", header_style="bold magenta")
     table.add_column("Feature Column", style="cyan")
     table.add_column("MAE", justify="right", style="green")
@@ -142,29 +189,48 @@ def evaluate_prophet(test_csv: str, horizon: int = 15, features=None):
     table.add_column("WAPE (%)", justify="right", style="magenta")
     table.add_column("80% Coverage (%)", justify="right", style="blue")
 
-    for fcol in features:
-        if fcol not in df.columns:
-            continue
-        train_slice = df[["ds" if "ds" in df.columns else ts_col, fcol]].rename(columns={ts_col: "ds", "ds": "ds", fcol: "y"})
-        m_prophet = Prophet(daily_seasonality=True, weekly_seasonality=True, interval_width=0.8)
-        m_prophet.fit(train_slice.iloc[:-horizon])
-        
-        future = m_prophet.make_future_dataframe(periods=horizon, freq="1min", include_history=False)
-        forecast = m_prophet.predict(future)
-        
-        actual = train_slice["y"].values[-horizon:]
-        pred_med = forecast["yhat"].values[:horizon]
-        pred_lo = forecast["yhat_lower"].values[:horizon]
-        pred_hi = forecast["yhat_upper"].values[:horizon]
-        
-        m = calculate_metrics(actual, pred_med, pred_lo, pred_hi)
-        table.add_row(
-            fcol,
-            f"{m['mae']:.4f}",
-            f"{m['rmse']:.4f}",
-            f"{m['wape']:.2f}%",
-            f"{m['coverage']:.2f}%" if m['coverage'] is not None else "N/A"
-        )
+    if forecaster is not None:
+        preds = forecaster.predict(df, horizon=horizon)
+        for fcol in features:
+            if fcol not in df.columns or fcol not in preds.columns:
+                continue
+            actual = df[fcol].values[-horizon:]
+            pred_med = preds[fcol].values[:horizon]
+            pred_lo = preds[f"{fcol}_lower"].values[:horizon] if f"{fcol}_lower" in preds.columns else None
+            pred_hi = preds[f"{fcol}_upper"].values[:horizon] if f"{fcol}_upper" in preds.columns else None
+            
+            m = calculate_metrics(actual, pred_med, pred_lo, pred_hi)
+            table.add_row(
+                fcol,
+                f"{m['mae']:.4f}",
+                f"{m['rmse']:.4f}",
+                f"{m['wape']:.2f}%",
+                f"{m['coverage']:.2f}%" if m['coverage'] is not None else "N/A"
+            )
+    else:
+        for fcol in features:
+            if fcol not in df.columns:
+                continue
+            train_slice = df[["ds" if "ds" in df.columns else ts_col, fcol]].rename(columns={ts_col: "ds", "ds": "ds", fcol: "y"})
+            m_prophet = Prophet(daily_seasonality=True, weekly_seasonality=True, interval_width=0.8)
+            m_prophet.fit(train_slice.iloc[:-horizon])
+            
+            future = m_prophet.make_future_dataframe(periods=horizon, freq="1min", include_history=False)
+            forecast = m_prophet.predict(future)
+            
+            actual = train_slice["y"].values[-horizon:]
+            pred_med = forecast["yhat"].values[:horizon]
+            pred_lo = forecast["yhat_lower"].values[:horizon]
+            pred_hi = forecast["yhat_upper"].values[:horizon]
+            
+            m = calculate_metrics(actual, pred_med, pred_lo, pred_hi)
+            table.add_row(
+                fcol,
+                f"{m['mae']:.4f}",
+                f"{m['rmse']:.4f}",
+                f"{m['wape']:.2f}%",
+                f"{m['coverage']:.2f}%" if m['coverage'] is not None else "N/A"
+            )
 
     console.print(table)
 
@@ -175,8 +241,8 @@ def main():
     parser.add_argument("--test_csv", type=str, default="data/synthetic_hpa_traffic_shifted_test.csv")
     args = parser.parse_args()
     
-    if args.model == "prophet":
-        evaluate_prophet(args.test_csv)
+    if args.model == "prophet" or args.checkpoint.endswith(".json") or "prophet" in args.checkpoint.lower():
+        evaluate_prophet(args.test_csv, checkpoint_path=args.checkpoint if os.path.exists(args.checkpoint) else None)
     else:
         evaluate_pytorch_model(args.checkpoint, args.test_csv)
 
