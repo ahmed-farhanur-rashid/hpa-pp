@@ -48,7 +48,6 @@ NON_TARGET_SKIP = {"cluster_ecommerce", "cluster_exam_system", "cluster_genai_in
 
 DEFAULT_TARGET_FEATURES = [
     "requests_per_second",
-    "concurrent_users",
     "cpu_utilization_pct",
     "memory_utilization_pct",
     "gpu_utilization_pct",

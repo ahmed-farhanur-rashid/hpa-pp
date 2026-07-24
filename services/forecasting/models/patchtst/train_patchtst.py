@@ -25,7 +25,6 @@ DEFAULT_OUT = os.path.join(PROJECT_ROOT, "models", "patchtst.pt")
 
 TARGET_FEATURES = [
     "requests_per_second",
-    "concurrent_users",
     "cpu_utilization_pct",
     "memory_utilization_pct",
     "gpu_utilization_pct",

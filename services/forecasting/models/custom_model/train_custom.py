@@ -18,13 +18,13 @@ from model import PSANetForecaster
 
 TARGET_FEATURES = [
     "requests_per_second",
-    "concurrent_users",
     "cpu_utilization_pct",
     "memory_utilization_pct",
     "gpu_utilization_pct",
 ]
 
 CONTEXT_FEATURES = [
+    "concurrent_users",
     "cluster_ecommerce",
     "cluster_exam_system",
     "cluster_genai_inference",
