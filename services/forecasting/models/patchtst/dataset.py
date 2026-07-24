@@ -17,8 +17,8 @@ from torch.utils.data import Dataset
 
 class TelemetryDataset(Dataset):
     def __init__(self, df: pd.DataFrame, feature_cols, input_window: int, forecast_horizon: int,
-                 patch_stride: int, steps_per_day: int = 1440, days_per_week: int = 7,
-                 mean=None, std=None):
+                 patch_stride: int, patch_len: int = 15, steps_per_day: int = 1440,
+                 days_per_week: int = 7, mean=None, std=None):
         self.input_window = input_window
         self.forecast_horizon = forecast_horizon
         self.steps_per_day = steps_per_day
@@ -40,7 +40,7 @@ class TelemetryDataset(Dataset):
         self.tod = ((dt.dt.hour * 60 + dt.dt.minute) // minutes_per_step).values
         self.dow = dt.dt.dayofweek.values
 
-        self.n_patches = (input_window - patch_stride) // patch_stride + 1  # rough estimate; not used for indexing
+        self.n_patches = (input_window - patch_len) // patch_stride + 1
         self.patch_stride = patch_stride
         self.valid_starts = len(self.values) - input_window - forecast_horizon
 

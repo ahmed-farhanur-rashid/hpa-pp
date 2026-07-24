@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import warnings
 
 import numpy as np
@@ -26,6 +27,8 @@ from prophet import Prophet
 
 warnings.filterwarnings("ignore")
 logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
 def rolling_eval(df: pd.DataFrame, feature: str, horizon: int, input_window: int,
@@ -159,7 +162,7 @@ def main(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--csv", type=str, default="data/synthetic_hpa_traffic_all_clusters_365d.csv")
+    p.add_argument("--csv", type=str, default=os.path.join(PROJECT_ROOT, "data", "synthetic_hpa_traffic_all_clusters_365d.csv"))
     p.add_argument("--features", nargs="+", default=["requests_per_second", "concurrent_users", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct"])
     p.add_argument("--horizon", type=int, default=15,
                     help="Forecast horizon in timesteps. Default = 15 min at 1-min resolution.")
@@ -172,7 +175,7 @@ if __name__ == "__main__":
                     help="Cap on rows of history used per fit.")
     p.add_argument("--n_eval_windows", type=int, default=20,
                     help="Number of rolling-origin windows to evaluate on.")
-    p.add_argument("--out", type=str, default="models/prophet.json",
+    p.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "models", "prophet.json"),
                     help="Path to save serialized Prophet model checkpoint.")
     args = p.parse_args()
     if args.max_train_history == 0:

@@ -1,7 +1,9 @@
 import sys
 import os
-from typing import Dict, List, Any
+import time
+from typing import Dict, List, Any, Optional
 import pandas as pd
+import numpy as np
 import torch
 
 # Ensure psa-net/src is accessible
@@ -19,10 +21,15 @@ from psanet.losses import quantile_loss
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from base_model import BaseForecaster
 
+
 class PSANetForecaster(BaseForecaster):
     """
     Forecaster Wrapper for PSA-Net (Patch-Spectral Attention Network).
     Implements the unified BaseForecaster interface.
+
+    feature_cols: target columns to forecast (n_targets).
+    context_cols: input-only columns (not forecast, but seen by model as context).
+    full feature list for the model = feature_cols + context_cols (targets first).
     """
     def __init__(
         self,
@@ -43,20 +50,41 @@ class PSANetForecaster(BaseForecaster):
         self.n_heads = n_heads
         self.n_layers = n_layers
         self.steps_per_day = steps_per_day
-        
+
         self.model = None
         self.mean = None
         self.std = None
-        self.feature_cols = []
+        self.feature_cols: List[str] = []
+        self.context_cols: List[str] = []
+        self.all_feature_cols: List[str] = []
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def fit(self, train_df: pd.DataFrame, feature_cols: List[str], target_col: str = "requests_per_second", epochs: int = 10, batch_size: int = 128, lr: float = 3e-4, **kwargs) -> Dict[str, Any]:
+    def fit(
+        self,
+        train_df: pd.DataFrame,
+        feature_cols: List[str],
+        target_col: str = "requests_per_second",
+        epochs: int = 30,
+        batch_size: int = 128,
+        lr: float = 3e-4,
+        patience: int = 5,
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Fits PSA-Net on the training dataframe.
+
+        feature_cols: target columns (what the model forecasts).
+        context_cols (via kwargs): input-only columns (not forecast).
         """
-        self.feature_cols = feature_cols
+        from torch.cuda.amp import autocast, GradScaler
+
+        self.feature_cols = list(feature_cols)
+        self.context_cols = list(kwargs.get("context_cols", []))
+        self.all_feature_cols = self.feature_cols + self.context_cols
+
         cfg = PSANetConfig(
-            n_features=len(feature_cols),
+            n_features=len(self.all_feature_cols),
+            n_targets=len(self.feature_cols),
             input_window=self.input_window,
             forecast_horizon=self.forecast_horizon,
             patch_len=self.patch_len,
@@ -67,31 +95,60 @@ class PSANetForecaster(BaseForecaster):
             steps_per_day=self.steps_per_day,
             use_spectral_branch=True,
             use_seasonal_embed=True,
-            use_spike_bank=True
+            use_spike_bank=True,
         )
 
-        train_ds, val_ds = make_splits(train_df, feature_cols, cfg, val_fraction=kwargs.get("val_fraction", 0.15))
+        train_ds, val_ds = make_splits(
+            train_df, self.all_feature_cols, cfg,
+            val_fraction=kwargs.get("val_fraction", 0.15),
+        )
         self.mean, self.std = train_ds.mean, train_ds.std
 
-        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True)
-        val_loader = torch.utils.data.DataLoader(val_ds, batch_size=min(batch_size, len(val_ds)), shuffle=False)
+        num_workers = min(4, os.cpu_count() or 1)
+        train_loader = torch.utils.data.DataLoader(
+            train_ds, batch_size=batch_size, shuffle=True, drop_last=True,
+            num_workers=num_workers, pin_memory=True,
+        )
+        val_loader = torch.utils.data.DataLoader(
+            val_ds, batch_size=min(batch_size, len(val_ds)), shuffle=False,
+            num_workers=num_workers, pin_memory=True,
+        )
 
         self.model = PSANet(cfg).to(self.device)
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr * 0.01)
+        scaler = GradScaler(enabled=self.device.type == "cuda")
+        quantiles = [0.1, 0.5, 0.9]
 
         from rich.console import Console
         from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
         from rich.table import Table
 
         console = Console()
-        console.print(f"[bold green]▶ [PSA-Net][/bold green] Initializing model on [cyan]{self.device}[/cyan] (Parameters: [bold]{self.model.param_count():,}[/bold])...")
-        history = {"train_loss": [], "val_loss": []}
+        console.print(
+            f"[bold green]▶ [PSA-Net][/bold green] Initializing model on [cyan]{self.device}[/cyan] "
+            f"(Parameters: [bold]{self.model.param_count():,}[/bold], "
+            f"Targets: [bold]{len(self.feature_cols)}[/bold], "
+            f"Context: [bold]{len(self.context_cols)}[/bold])..."
+        )
 
-        table = Table(title="[bold yellow]PSA-Net Training Metrics[/bold yellow]", header_style="bold magenta")
+        history = {"train_loss": [], "val_loss": []}
+        best_val_loss = float("inf")
+        best_state = None
+        best_epoch = 0
+        epochs_no_improve = 0
+
+        table = Table(
+            title="[bold yellow]PSA-Net Training Metrics[/bold yellow]",
+            header_style="bold magenta",
+        )
         table.add_column("Epoch", justify="center", style="cyan")
         table.add_column("Train Loss", justify="right", style="green")
         table.add_column("Val Loss", justify="right", style="blue")
+        table.add_column("LR", justify="right", style="dim")
         table.add_column("Status", justify="center", style="dim")
+
+        t_start = time.time()
 
         with Progress(
             SpinnerColumn(),
@@ -99,70 +156,119 @@ class PSANetForecaster(BaseForecaster):
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeRemainingColumn(),
-            console=console
+            console=console,
         ) as progress:
             epoch_task = progress.add_task("[yellow]Training Epochs...", total=epochs)
             for ep in range(epochs):
+                # --- Train ---
                 self.model.train()
                 train_loss = 0.0
                 batch_task = progress.add_task(f"[cyan]Epoch {ep+1}/{epochs}", total=len(train_loader))
                 for hist, tod, dow, target in train_loader:
-                    hist, tod, dow, target = hist.to(self.device), tod.to(self.device), dow.to(self.device), target.to(self.device)
-                    optimizer.zero_grad()
-                    pred = self.model(hist, tod, dow)
-                    loss = quantile_loss(pred, target, [0.1, 0.5, 0.9])
-                    loss.backward()
+                    hist = hist.to(self.device, non_blocking=True)
+                    tod = tod.to(self.device, non_blocking=True)
+                    dow = dow.to(self.device, non_blocking=True)
+                    target = target.to(self.device, non_blocking=True)
+
+                    optimizer.zero_grad(set_to_none=True)
+                    with autocast(enabled=self.device.type == "cuda"):
+                        pred = self.model(hist, tod, dow)
+                        loss = quantile_loss(pred, target, quantiles)
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                    optimizer.step()
+                    scaler.step(optimizer)
+                    scaler.update()
                     train_loss += loss.item()
                     progress.update(batch_task, advance=1)
 
                 train_loss /= len(train_loader)
                 progress.remove_task(batch_task)
 
+                # --- Validate ---
                 self.model.eval()
                 val_loss = 0.0
                 with torch.no_grad():
                     for hist, tod, dow, target in val_loader:
-                        hist, tod, dow, target = hist.to(self.device), tod.to(self.device), dow.to(self.device), target.to(self.device)
-                        pred = self.model(hist, tod, dow)
-                        val_loss += quantile_loss(pred, target, [0.1, 0.5, 0.9]).item()
+                        hist = hist.to(self.device, non_blocking=True)
+                        tod = tod.to(self.device, non_blocking=True)
+                        dow = dow.to(self.device, non_blocking=True)
+                        target = target.to(self.device, non_blocking=True)
+                        with autocast(enabled=self.device.type == "cuda"):
+                            pred = self.model(hist, tod, dow)
+                            val_loss += quantile_loss(pred, target, quantiles).item()
                 val_loss /= len(val_loader)
+                scheduler.step()
 
+                current_lr = scheduler.get_last_lr()[0]
                 history["train_loss"].append(train_loss)
                 history["val_loss"].append(val_loss)
-                table.add_row(f"{ep+1}/{epochs}", f"{train_loss:.5f}", f"{val_loss:.5f}", "✔")
+
+                # --- Early stopping check ---
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_epoch = ep + 1
+                    best_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+                    epochs_no_improve = 0
+                    status = "[bold green]✔ best[/bold green]"
+                else:
+                    epochs_no_improve += 1
+                    status = f"[dim]{epochs_no_improve}/{patience}[/dim]"
+
+                table.add_row(
+                    f"{ep+1}/{epochs}",
+                    f"{train_loss:.5f}",
+                    f"{val_loss:.5f}",
+                    f"{current_lr:.2e}",
+                    status,
+                )
                 progress.update(epoch_task, advance=1)
 
+                if epochs_no_improve >= patience:
+                    console.print(f"[bold yellow]Early stopping at epoch {ep+1}[/bold yellow]")
+                    break
+
+        elapsed = time.time() - t_start
         console.print(table)
+        console.print(
+            f"[bold green]✔ Training complete in {elapsed:.0f}s[/bold green] "
+            f"(best val_loss={best_val_loss:.5f} at epoch {best_epoch})"
+        )
+
+        # Restore best weights
+        if best_state is not None:
+            self.model.load_state_dict({k: v.to(self.device) for k, v in best_state.items()})
+
+        history["best_epoch"] = best_epoch
+        history["best_val_loss"] = best_val_loss
         return history
 
     def predict(self, context_df: pd.DataFrame, horizon: int = 15) -> pd.DataFrame:
-        """
-        Generates forecast for future horizon steps.
-        """
         if self.model is None:
             raise RuntimeError("Model has not been trained yet. Call fit() first.")
         self.model.eval()
-        # Extract features and scale
-        vals = (context_df[self.feature_cols].values[-self.input_window:] - self.mean) / self.std
+        vals = (context_df[self.all_feature_cols].values[-self.input_window:] - self.mean) / self.std
         hist_tensor = torch.tensor(vals, dtype=torch.float32).unsqueeze(0).to(self.device)
-        
+
         with torch.no_grad():
-            preds = self.model(hist_tensor) # [1, horizon, F, 3]
-            preds_unscaled = preds[0, :, :, 1].cpu().numpy() * self.std + self.mean # median quantile (q=0.5)
+            preds = self.model(hist_tensor)  # [1, horizon, n_targets, 3]
+            # median quantile (q=0.5)
+            preds_unscaled = preds[0, :, :, 1].cpu().numpy() * self.std[:len(self.feature_cols)] + self.mean[:len(self.feature_cols)]
 
         res_df = pd.DataFrame(preds_unscaled, columns=self.feature_cols)
         return res_df
 
     def save(self, filepath: str) -> None:
         if self.model is not None:
+            os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
             torch.save({
                 "model_state": self.model.state_dict(),
                 "mean": self.mean,
                 "std": self.std,
                 "feature_cols": self.feature_cols,
-                "config": self.model.cfg
+                "context_cols": self.context_cols,
+                "all_feature_cols": self.all_feature_cols,
+                "config": self.model.cfg,
             }, filepath)
             print(f"[PSA-Net] Saved checkpoint to {filepath}")
 
@@ -173,5 +279,7 @@ class PSANetForecaster(BaseForecaster):
         self.model.load_state_dict(checkpoint["model_state"])
         self.mean = checkpoint["mean"]
         self.std = checkpoint["std"]
-        self.feature_cols = checkpoint["feature_cols"]
+        self.feature_cols = checkpoint.get("feature_cols", [])
+        self.context_cols = checkpoint.get("context_cols", [])
+        self.all_feature_cols = checkpoint.get("all_feature_cols", self.feature_cols + self.context_cols)
         print(f"[PSA-Net] Loaded checkpoint from {filepath}")

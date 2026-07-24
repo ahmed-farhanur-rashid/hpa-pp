@@ -16,7 +16,6 @@ if CUSTOM_MODEL_DIR not in sys.path:
 import pandas as pd
 from model import PSANetForecaster
 
-# Columns the model actually forecasts (quantile output + loss).
 TARGET_FEATURES = [
     "requests_per_second",
     "concurrent_users",
@@ -25,8 +24,6 @@ TARGET_FEATURES = [
     "gpu_utilization_pct",
 ]
 
-# Columns fed in as history/context but NOT forecast: cluster one-hots (identity signal,
-# analogous to tod/dow) and pod_count (HPA's reaction to load, not something we need to predict).
 CONTEXT_FEATURES = [
     "cluster_ecommerce",
     "cluster_exam_system",
@@ -36,6 +33,9 @@ CONTEXT_FEATURES = [
     "pod_count",
 ]
 
+DEFAULT_OUT = os.path.join(PROJECT_ROOT, "models", "psa-net.pt")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train PSA-Net Custom Forecaster")
     parser.add_argument("--csv", type=str, default="data/synthetic_hpa_traffic_all_clusters_365d.csv")
@@ -43,19 +43,24 @@ def main():
                          help="Target columns: what the model forecasts.")
     parser.add_argument("--context_features", nargs="+", default=CONTEXT_FEATURES,
                          help="Input-only columns: used as context, never forecast.")
-    parser.add_argument("--target", type=str, default="requests_per_second")
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--input_window", type=int, default=120)
     parser.add_argument("--horizon", type=int, default=15)
-    parser.add_argument("--out", type=str, default="models/psa-net.pt")
+    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--out", type=str, default=DEFAULT_OUT)
     args = parser.parse_args()
 
-    print(f"Loading preprocessed dataset from: {args.csv}")
-    if not os.path.exists(args.csv):
-        raise FileNotFoundError(f"Dataset not found at {args.csv}. Run 'python prep_data.py' first.")
+    csv_path = args.csv
+    if not os.path.isabs(csv_path):
+        csv_path = os.path.join(PROJECT_ROOT, csv_path)
 
-    df = pd.read_csv(args.csv)
+    print(f"Loading preprocessed dataset from: {csv_path}")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Dataset not found at {csv_path}. Run 'python scripts/prep_data.py' first.")
+
+    df = pd.read_csv(csv_path)
     print(f"Dataset loaded ({len(df):,} rows, {len(df.columns)} columns).")
     print(f"Targets ({len(args.features)}): {args.features}")
     print(f"Context-only ({len(args.context_features)}): {args.context_features}")
@@ -64,20 +69,22 @@ def main():
         input_window=args.input_window,
         forecast_horizon=args.horizon,
         patch_len=15,
-        patch_stride=15
+        patch_stride=15,
     )
 
     metrics = forecaster.fit(
         df,
         feature_cols=args.features,
         context_cols=args.context_features,
-        target_col=args.target,
         epochs=args.epochs,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        lr=args.lr,
+        patience=args.patience,
     )
 
     forecaster.save(args.out)
     print(f"Training completed successfully! Model checkpoint saved to {args.out}")
+
 
 if __name__ == "__main__":
     main()

@@ -16,7 +16,6 @@ TARGET_DIR = os.path.join(BASE_DIR, "data")
 
 COLUMNS_TO_DROP = [
     "requests_per_5min",
-    "requests_per_1min",
     "gpus_in_use",
     "is_job_churn_spike",
     "is_flash_event_spike",
