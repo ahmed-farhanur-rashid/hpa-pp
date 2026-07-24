@@ -10,7 +10,7 @@ python scripts/prep_data.py
 
 ## 2. Model Training (All Architectures)
 
-All model checkpoints are saved directly to `services/forecasting/checkpoints/`.
+All model checkpoints are saved directly to `models/`.
 
 ### A. Train Custom Model (PSA-Net) with Rich Console UI
 
@@ -19,7 +19,7 @@ All model checkpoints are saved directly to `services/forecasting/checkpoints/`.
 python services/forecasting/models/custom_model/train_custom.py \
   --epochs 10 \
   --batch_size 128 \
-  --out services/forecasting/checkpoints/psanet_checkpoint.pt
+  --out models/psa-net.pt
 ```
 
 ### B. Train Baseline 1: PatchTST (Channel-Independent Transformer)
@@ -28,7 +28,7 @@ python services/forecasting/models/custom_model/train_custom.py \
 python services/forecasting/models/patchtst/train_patchtst.py \
   --epochs 10 \
   --batch_size 128 \
-  --out services/forecasting/checkpoints/patchtst_checkpoint.pt
+  --out models/patchtst.pt
 ```
 
 ### C. Train Baseline 2: Prophet (Additive Baseline)
@@ -37,7 +37,7 @@ python services/forecasting/models/patchtst/train_patchtst.py \
 python services/forecasting/models/prophet/train_prophet.py \
   --horizon 15 \
   --n_eval_windows 20 \
-  --out services/forecasting/checkpoints/prophet_checkpoint.json
+  --out models/prophet.json
 ```
 
 ## 3. Model Evaluation on Test Set
@@ -47,17 +47,17 @@ Evaluate any trained checkpoint or baseline model on the 30-day out-of-distribut
 ```bash
 # Evaluate Custom Model (PSA-Net) Checkpoint
 python services/forecasting/models/evaluate.py \
-  --checkpoint services/forecasting/checkpoints/psanet_checkpoint.pt \
+  --checkpoint models/psa-net.pt \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 
 # Evaluate PatchTST Baseline Checkpoint
 python services/forecasting/models/evaluate.py \
-  --checkpoint services/forecasting/checkpoints/patchtst_checkpoint.pt \
+  --checkpoint models/patchtst.pt \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 
 # Evaluate Prophet Baseline Checkpoint
 python services/forecasting/models/evaluate.py \
-  --checkpoint services/forecasting/checkpoints/prophet_checkpoint.json \
+  --checkpoint models/prophet.json \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 ```
 

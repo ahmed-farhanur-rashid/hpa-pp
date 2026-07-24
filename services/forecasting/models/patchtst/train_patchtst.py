@@ -146,6 +146,6 @@ if __name__ == "__main__":
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-4)  # PatchTST typically wants a lower LR than PSA-Net
     p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--out", type=str, default="services/forecasting/checkpoints/patchtst_checkpoint.pt")
+    p.add_argument("--out", type=str, default="models/patchtst.pt")
     args = p.parse_args()
     train(args)

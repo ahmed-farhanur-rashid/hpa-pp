@@ -172,7 +172,7 @@ if __name__ == "__main__":
                     help="Cap on rows of history used per fit.")
     p.add_argument("--n_eval_windows", type=int, default=20,
                     help="Number of rolling-origin windows to evaluate on.")
-    p.add_argument("--out", type=str, default="services/forecasting/checkpoints/prophet_checkpoint.json",
+    p.add_argument("--out", type=str, default="models/prophet.json",
                     help="Path to save serialized Prophet model checkpoint.")
     args = p.parse_args()
     if args.max_train_history == 0:

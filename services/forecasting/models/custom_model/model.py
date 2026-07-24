@@ -7,6 +7,8 @@ import torch
 # Ensure psa-net/src is accessible
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 PSANET_SRC = os.path.join(PROJECT_ROOT, "psa-net", "src")
+if not os.path.exists(PSANET_SRC):
+    PSANET_SRC = os.path.join(PROJECT_ROOT, "temp", "psa-net", "src")
 if PSANET_SRC not in sys.path:
     sys.path.insert(0, PSANET_SRC)
 

@@ -56,3 +56,5 @@ model_cache/
 # Build
 *.whl
 *.tar.gz
+*.zip
+models/

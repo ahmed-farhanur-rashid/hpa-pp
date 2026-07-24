@@ -62,14 +62,13 @@ For each metric at each minute, the model outputs **3 uncertainty quantiles**:
 ## 3. Model Checkpoints & Storage
 
 ### Q5: Where are model checkpoints saved?
-All service checkpoints are saved in `services/forecasting/checkpoints/`:
-- `services/forecasting/checkpoints/psanet_checkpoint.pt`: PSA-Net 15-minute checkpoint (~25 MB)
-- `services/forecasting/checkpoints/patchtst_checkpoint.pt`: PatchTST 15-minute checkpoint (~1.8 MB)
-- `services/forecasting/checkpoints/prophet_checkpoint.json`: Prophet 15-minute checkpoint (~1.5 MB)
-- `models/psanet_checkpoint.pt`: Standalone 60-minute PSA-Net model (~92 MB)
+All model checkpoints are saved in the `models/` directory:
+- `models/psa-net.pt`: PSA-Net model checkpoint (~92 MB)
+- `models/patchtst.pt`: PatchTST baseline model checkpoint (~1.8 MB)
+- `models/prophet.json`: Prophet baseline model checkpoint (~1.9 GB)
 
-### Q6: Why is PatchTST so lightweight (1.8 MB) compared to PSA-Net (25 MB / 92 MB)?
-1. **Channel Independence**: PatchTST reuses the exact same Transformer weights across all 11 feature channels independently. The weights do not multiply by feature count.
+### Q6: Why is PatchTST so lightweight (1.8 MB) compared to PSA-Net (92 MB)?
+1. **Channel Independence**: PatchTST reuses the exact same Transformer weights across all feature channels independently. The weights do not multiply by feature count.
 2. **Channel-Mixing Head**: PSA-Net flattens all features and patches into a joint representation matrix (`n_features * n_patches * d_model`), creating a much larger output projection layer.
 3. **Auxiliary Modules**: PSA-Net includes extra modules (FFT spectral projection, 1440-step seasonal embedding tables, and a 16-pattern Spike Pattern Bank cross-attention layer).
 
@@ -84,16 +83,16 @@ Run the unified evaluation script ([evaluate.py](file:///home/farhan/my-projects
 ```bash
 # Evaluate PSA-Net
 python services/forecasting/models/evaluate.py \
-  --checkpoint services/forecasting/checkpoints/psanet_checkpoint.pt \
+  --checkpoint models/psa-net.pt \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 
 # Evaluate PatchTST
 python services/forecasting/models/evaluate.py \
-  --checkpoint services/forecasting/checkpoints/patchtst_checkpoint.pt \
+  --checkpoint models/patchtst.pt \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 
 # Evaluate Prophet
 python services/forecasting/models/evaluate.py \
-  --checkpoint services/forecasting/checkpoints/prophet_checkpoint.json \
+  --checkpoint models/prophet.json \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 ```

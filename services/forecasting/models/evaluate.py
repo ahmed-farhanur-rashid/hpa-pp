@@ -23,6 +23,9 @@ warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 PSANET_SRC = os.path.join(PROJECT_ROOT, "psa-net", "src")
+if not os.path.exists(PSANET_SRC):
+    PSANET_SRC = os.path.join(PROJECT_ROOT, "temp", "psa-net", "src")
+
 CUSTOM_MODEL_DIR = os.path.join(PROJECT_ROOT, "services", "forecasting", "models", "custom_model")
 PATCHTST_DIR = os.path.join(PROJECT_ROOT, "services", "forecasting", "models", "patchtst")
 PROPHET_DIR = os.path.join(PROJECT_ROOT, "services", "forecasting", "models", "prophet")
@@ -237,7 +240,7 @@ def evaluate_prophet(test_csv: str, checkpoint_path: str = None, horizon: int = 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate Forecasting Checkpoint or Baseline")
     parser.add_argument("--model", type=str, default="psanet", choices=["psanet", "patchtst", "prophet"])
-    parser.add_argument("--checkpoint", type=str, default="services/forecasting/checkpoints/psanet_checkpoint.pt")
+    parser.add_argument("--checkpoint", type=str, default="models/psa-net.pt")
     parser.add_argument("--test_csv", type=str, default="data/synthetic_hpa_traffic_shifted_test.csv")
     args = parser.parse_args()
     

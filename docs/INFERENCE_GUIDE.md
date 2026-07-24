@@ -137,7 +137,7 @@ from custom_model.model import PSANetForecaster
 forecaster = PSANetForecaster(input_window=120, forecast_horizon=15)
 
 # 2. Load Trained Weights
-forecaster.load("services/forecasting/checkpoints/psanet_checkpoint.pt")
+forecaster.load("models/psa-net.pt")
 
 # 3. Generate Predictions on Recent Context
 forecast_df = forecaster.predict(recent_context_df, horizon=15)
@@ -150,18 +150,18 @@ forecast_df = forecaster.predict(recent_context_df, horizon=15)
 To run automated inference and compute evaluation metrics (MAE, RMSE, WAPE, 80% Coverage) across the out-of-distribution test set:
 
 ```bash
-# Evaluate PSA-Net
+# Evaluate PSA-Net Checkpoint
 python services/forecasting/models/evaluate.py \
-  --checkpoint services/forecasting/checkpoints/psanet_checkpoint.pt \
+  --checkpoint models/psa-net.pt \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 
-# Evaluate PatchTST
+# Evaluate PatchTST Baseline Checkpoint
 python services/forecasting/models/evaluate.py \
-  --checkpoint models/patchtst_checkpoint.pt \
+  --checkpoint models/patchtst.pt \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 
-# Evaluate Prophet
+# Evaluate Prophet Baseline Checkpoint
 python services/forecasting/models/evaluate.py \
-  --checkpoint services/forecasting/checkpoints/prophet_checkpoint.json \
+  --checkpoint models/prophet.json \
   --test_csv data/synthetic_hpa_traffic_shifted_test.csv
 ```

@@ -4,6 +4,8 @@ import argparse
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 PSANET_SRC = os.path.join(PROJECT_ROOT, "psa-net", "src")
+if not os.path.exists(PSANET_SRC):
+    PSANET_SRC = os.path.join(PROJECT_ROOT, "temp", "psa-net", "src")
 CUSTOM_MODEL_DIR = os.path.abspath(os.path.dirname(__file__))
 
 if PSANET_SRC not in sys.path:
@@ -14,54 +16,66 @@ if CUSTOM_MODEL_DIR not in sys.path:
 import pandas as pd
 from model import PSANetForecaster
 
-DEFAULT_FEATURES = [
-    "cluster_ecommerce",
-    "cluster_exam_system",
-    "cluster_genai_inference",
-    "cluster_streaming",
-    "cluster_university_portal",
+# Columns the model actually forecasts (quantile output + loss).
+TARGET_FEATURES = [
     "requests_per_second",
     "concurrent_users",
     "cpu_utilization_pct",
     "memory_utilization_pct",
     "gpu_utilization_pct",
-    "pod_count"
+]
+
+# Columns fed in as history/context but NOT forecast: cluster one-hots (identity signal,
+# analogous to tod/dow) and pod_count (HPA's reaction to load, not something we need to predict).
+CONTEXT_FEATURES = [
+    "cluster_ecommerce",
+    "cluster_exam_system",
+    "cluster_genai_inference",
+    "cluster_streaming",
+    "cluster_university_portal",
+    "pod_count",
 ]
 
 def main():
     parser = argparse.ArgumentParser(description="Train PSA-Net Custom Forecaster")
     parser.add_argument("--csv", type=str, default="data/synthetic_hpa_traffic_all_clusters_365d.csv")
-    parser.add_argument("--features", nargs="+", default=DEFAULT_FEATURES)
+    parser.add_argument("--features", nargs="+", default=TARGET_FEATURES,
+                         help="Target columns: what the model forecasts.")
+    parser.add_argument("--context_features", nargs="+", default=CONTEXT_FEATURES,
+                         help="Input-only columns: used as context, never forecast.")
     parser.add_argument("--target", type=str, default="requests_per_second")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--input_window", type=int, default=120)
     parser.add_argument("--horizon", type=int, default=15)
-    parser.add_argument("--out", type=str, default="services/forecasting/checkpoints/psanet_checkpoint.pt")
+    parser.add_argument("--out", type=str, default="models/psa-net.pt")
     args = parser.parse_args()
 
     print(f"Loading preprocessed dataset from: {args.csv}")
     if not os.path.exists(args.csv):
         raise FileNotFoundError(f"Dataset not found at {args.csv}. Run 'python prep_data.py' first.")
-        
+
     df = pd.read_csv(args.csv)
     print(f"Dataset loaded ({len(df):,} rows, {len(df.columns)} columns).")
-    
+    print(f"Targets ({len(args.features)}): {args.features}")
+    print(f"Context-only ({len(args.context_features)}): {args.context_features}")
+
     forecaster = PSANetForecaster(
         input_window=args.input_window,
         forecast_horizon=args.horizon,
         patch_len=15,
         patch_stride=15
     )
-    
+
     metrics = forecaster.fit(
         df,
         feature_cols=args.features,
+        context_cols=args.context_features,
         target_col=args.target,
         epochs=args.epochs,
         batch_size=args.batch_size
     )
-    
+
     forecaster.save(args.out)
     print(f"Training completed successfully! Model checkpoint saved to {args.out}")
 
