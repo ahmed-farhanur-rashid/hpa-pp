@@ -6,7 +6,7 @@ All endpoints return ApiResponse[T] for consistency with other services.
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shared.api import ApiResponse, SimulatorStatusResponse
 from shared.metrics import MetricSample, MetricBatch
@@ -31,6 +31,25 @@ class StartSimulationRequest(BaseModel):
 class UpdateConfigRequest(BaseModel):
     """New simulation configuration."""
     config: SimulationConfig
+
+
+class ScaleSimDeploymentRequest(BaseModel):
+    """Scale a deployment's replica count in the simulation."""
+    deployment_id: str
+    target_replicas: int = Field(..., ge=0)
+    execution_source: str = Field(default="manual")
+
+
+class SimGpuAssignment(BaseModel):
+    """GPU assignment instruction for simulation."""
+    pod_id: str
+    gpu_id: str
+    gpu_memory_mb: int | None = Field(default=None, ge=1)
+
+
+class GpuAssignSimRequest(BaseModel):
+    """Batch GPU assignment request."""
+    assignments: list[SimGpuAssignment]
 
 
 # ── Helpers ────────────────────────────────────────────────────
@@ -282,6 +301,52 @@ async def update_simulation_config(
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
     return ApiResponse(data=engine.get_config())
+
+
+@router.post("/sim/scale", response_model=ApiResponse[dict])
+async def scale_simulation_deployment(
+    request: ScaleSimDeploymentRequest,
+    engine: SimulationEngine = Depends(get_simulation_engine),
+):
+    """Scale a deployment's replica count (called by controller)."""
+    cluster = getattr(engine, "cluster_state", None)
+    if cluster is None:
+        raise HTTPException(status_code=400, detail="Simulation not started")
+    try:
+        cluster.scale_deployment(request.deployment_id, request.target_replicas)
+        return ApiResponse(data={
+            "deployment_id": request.deployment_id,
+            "target_replicas": request.target_replicas,
+            "execution_source": request.execution_source,
+        })
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post("/sim/assign-gpu", response_model=ApiResponse[dict])
+async def assign_simulation_gpu(
+    request: GpuAssignSimRequest,
+    engine: SimulationEngine = Depends(get_simulation_engine),
+):
+    """Assign specific GPU devices to pods (called by GPU scheduler)."""
+    cluster = getattr(engine, "cluster_state", None)
+    if cluster is None:
+        raise HTTPException(status_code=400, detail="Simulation not started")
+    results: list[dict] = []
+    errors: list[dict] = []
+    for assignment in request.assignments:
+        try:
+            cluster.assign_gpu(
+                pod_id=assignment.pod_id,
+                gpu_id=assignment.gpu_id,
+                gpu_memory_mb=assignment.gpu_memory_mb,
+            )
+            results.append({"pod_id": assignment.pod_id, "gpu_id": assignment.gpu_id, "status": "assigned"})
+        except (KeyError, ValueError) as e:
+            errors.append({"pod_id": assignment.pod_id, "gpu_id": assignment.gpu_id, "error": str(e)})
+    return ApiResponse(data={"results": results, "errors": errors})
 
 
 # ── Anomaly management ────────────────────────────────────────

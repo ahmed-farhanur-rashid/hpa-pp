@@ -75,6 +75,10 @@ class MetricSample(AuditModel):
     )
 
 
+# Type alias for external consumers (e.g. executor module)
+MetricsSnapshot = MetricSample
+
+
 class MetricBatch(TimestampedModel):
     """Batch of metric samples for bulk insert or transport.
 
