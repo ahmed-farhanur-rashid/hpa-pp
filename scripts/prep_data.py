@@ -1,6 +1,8 @@
+#!/usr/bin/env python3
 import os
 import shutil
 import pandas as pd
+import numpy as np
 
 # Determine project root cleanly
 CURRENT_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -15,7 +17,6 @@ TARGET_DIR = os.path.join(BASE_DIR, "data")
 COLUMNS_TO_DROP = [
     "requests_per_5min",
     "requests_per_1min",
-    "concurrent_users",
     "gpus_in_use",
     "is_job_churn_spike",
     "is_flash_event_spike",
@@ -31,6 +32,14 @@ RENAME_MAP = {
     "timestamp": "ds",
     "active_pods": "pod_count"
 }
+
+ALL_CLUSTERS = [
+    "ecommerce",
+    "exam_system",
+    "genai_inference",
+    "streaming",
+    "university_portal"
+]
 
 def prep_dataset_file(file_path: str):
     print(f"---> Processing: {file_path}")
@@ -48,10 +57,18 @@ def prep_dataset_file(file_path: str):
         df = df.rename(columns=rename_cols)
         print(f"     Renamed columns: {rename_cols}")
         
-    # 3. Ensure column order with unique_id and ds first
+    # 3. Generate One-Hot Encoding for unique_id
+    if "unique_id" in df.columns:
+        for c in ALL_CLUSTERS:
+            ohe_col = f"cluster_{c}"
+            df[ohe_col] = (df["unique_id"] == c).astype(int)
+        print(f"     Added One-Hot Encoded cluster columns for {ALL_CLUSTERS}")
+        
+    # 4. Order columns cleanly
     first_cols = [c for c in ["unique_id", "ds"] if c in df.columns]
-    other_cols = [c for c in df.columns if c not in first_cols]
-    df = df[first_cols + other_cols]
+    ohe_cols = [f"cluster_{c}" for c in ALL_CLUSTERS if f"cluster_{c}" in df.columns]
+    other_cols = [c for c in df.columns if c not in first_cols and c not in ohe_cols]
+    df = df[first_cols + ohe_cols + other_cols]
     
     # Save back
     df.to_csv(file_path, index=False)
@@ -79,7 +96,7 @@ def main():
         print(f"Copied: {f} -> data/{f}")
         
     print("\n" + "=" * 80)
-    print("STEP 2: PREPROCESSING DATASETS IN data/")
+    print("STEP 2: PREPROCESSING DATASETS IN data/ (OHE + RENAME + DROPS)")
     print("=" * 80)
     
     target_files = [f for f in os.listdir(TARGET_DIR) if f.endswith(".csv")]
@@ -87,7 +104,7 @@ def main():
         fpath = os.path.join(TARGET_DIR, f)
         prep_dataset_file(fpath)
         
-    print("\n[SUCCESS] Dataset preparation complete! All clean datasets available in data/")
+    print("\n[SUCCESS] Dataset preparation complete! All preprocessed datasets available in data/")
 
 if __name__ == "__main__":
     main()

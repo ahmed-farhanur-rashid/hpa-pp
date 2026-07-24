@@ -98,7 +98,10 @@ def train(args):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--csv", type=str, default="data/synthetic_hpa_traffic_all_clusters_365d.csv")
-    p.add_argument("--features", nargs="+", default=["requests_per_second", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct", "pod_count"])
+    p.add_argument("--features", nargs="+", default=[
+        "cluster_ecommerce", "cluster_exam_system", "cluster_genai_inference", "cluster_streaming", "cluster_university_portal",
+        "requests_per_second", "concurrent_users", "cpu_utilization_pct", "memory_utilization_pct", "gpu_utilization_pct", "pod_count"
+    ])
     p.add_argument("--steps_per_day", type=int, default=1440)
     p.add_argument("--input_window", type=int, default=1440)
     p.add_argument("--horizon", type=int, default=60)
@@ -110,6 +113,6 @@ if __name__ == "__main__":
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-4)  # PatchTST typically wants a lower LR than PSA-Net
     p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--out", type=str, default="patchtst_checkpoint.pt")
+    p.add_argument("--out", type=str, default="services/forecasting/checkpoints/patchtst_checkpoint.pt")
     args = p.parse_args()
     train(args)
