@@ -105,46 +105,47 @@ def main(args):
     table.add_column("Pinball Loss (q=0.5)", justify="right", style="magenta")
     table.add_column("80% Coverage (%)", justify="right", style="blue")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeRemainingColumn(),
-        console=console
-    ) as progress:
-        fit_task = progress.add_task("[yellow]Fitting Prophet Models...", total=total_fits)
-        for feature in valid_features:
-            def on_step():
-                progress.update(fit_task, advance=1, description=f"[cyan]Fitting Prophet for '{feature}'...")
+    if args.n_eval_windows > 0:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            fit_task = progress.add_task("[yellow]Fitting Prophet Models...", total=total_fits)
+            for feature in valid_features:
+                def on_step():
+                    progress.update(fit_task, advance=1, description=f"[cyan]Fitting Prophet for '{feature}'...")
 
-            res = rolling_eval(
-                df, feature, horizon=args.horizon, input_window=args.input_window,
-                n_eval_windows=args.n_eval_windows, freq=args.freq,
-                max_train_history=args.max_train_history,
-                progress_callback=on_step
-            )
-            if len(res) == 0:
-                continue
+                res = rolling_eval(
+                    df, feature, horizon=args.horizon, input_window=args.input_window,
+                    n_eval_windows=args.n_eval_windows, freq=args.freq,
+                    max_train_history=args.max_train_history,
+                    progress_callback=on_step
+                )
+                if len(res) == 0:
+                    continue
 
-            all_results[feature] = res
-            mae_val = res['mae'].mean()
-            rmse_val = res['rmse'].mean()
-            pinball_val = res['pinball_median'].mean()
-            cov_val = res['coverage'].mean() * 100.0
+                all_results[feature] = res
+                mae_val = res['mae'].mean()
+                rmse_val = res['rmse'].mean()
+                pinball_val = res['pinball_median'].mean()
+                cov_val = res['coverage'].mean() * 100.0
 
-            table.add_row(
-                feature,
-                f"{mae_val:.4f}",
-                f"{rmse_val:.4f}",
-                f"{pinball_val:.4f}",
-                f"{cov_val:.2f}%"
-            )
+                table.add_row(
+                    feature,
+                    f"{mae_val:.4f}",
+                    f"{rmse_val:.4f}",
+                    f"{pinball_val:.4f}",
+                    f"{cov_val:.2f}%"
+                )
 
-    console.print(table)
-    if all_results:
-        combined = pd.concat(all_results.values())
-        console.print(f"[bold green]✔ Prophet Baseline Evaluation Complete![/bold green] (Averaged MAE: [bold]{combined['mae'].mean():.4f}[/bold], RMSE: [bold]{combined['rmse'].mean():.4f}[/bold])")
+        console.print(table)
+        if all_results:
+            combined = pd.concat(all_results.values())
+            console.print(f"[bold green]✔ Prophet Baseline Evaluation Complete![/bold green] (Averaged MAE: [bold]{combined['mae'].mean():.4f}[/bold], RMSE: [bold]{combined['rmse'].mean():.4f}[/bold])")
 
     if args.out:
         console.print(f"[bold yellow]▶ Fitting full Prophet model and saving checkpoint to:[/bold yellow] [cyan]{args.out}[/cyan]...")

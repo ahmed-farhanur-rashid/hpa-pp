@@ -28,7 +28,7 @@ python services/forecasting/models/custom_model/train_custom.py \
 python services/forecasting/models/patchtst/train_patchtst.py \
   --epochs 10 \
   --batch_size 128 \
-  --out services/forecasting/checkpoints/patchtst_checkpoint.pt
+  --out models/patchtst_checkpoint.pt
 ```
 
 ### C. Train Baseline 2: Prophet (Additive Baseline)
